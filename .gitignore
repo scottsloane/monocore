@@ -1,0 +1,23 @@
+# dependencies
+node_modules/
+**/node_modules/
+
+# builds
+dist/
+**/dist/
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/binaries/
+
+# python
+**/.venv/
+**/__pycache__/
+*.pyc
+
+# local data / db
+*.db
+*.db-wal
+*.db-shm
+
+# logs / os
+*.log
+.DS_Store
