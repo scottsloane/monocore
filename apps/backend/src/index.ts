@@ -9,7 +9,18 @@ import {
   health as gb10Health,
   createJob,
   streamLogs,
+  syncToGb10,
 } from "./gb10.ts";
+import {
+  createProject,
+  listProjects,
+  getProject,
+  saveProject,
+  paths,
+  type CreateInput,
+} from "./projects.ts";
+import { prune } from "./pipeline/prune.ts";
+import { dedupe } from "./pipeline/dedupe.ts";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -90,6 +101,94 @@ const server = Bun.serve<WsData>({
         finishedAt: row.finished_at ?? undefined,
         exitCode: row.exit_code ?? undefined,
       });
+    }
+
+    // --- Projects -------------------------------------------------------
+    // GET /api/projects
+    if (pathname === "/api/projects" && req.method === "GET") {
+      return json({ projects: listProjects() });
+    }
+
+    // POST /api/projects  { name, baseModel, trainType, inputFolder }
+    if (pathname === "/api/projects" && req.method === "POST") {
+      try {
+        const body = (await req.json()) as CreateInput;
+        return json(createProject(body), 201);
+      } catch (e) {
+        return json({ error: e instanceof Error ? e.message : String(e) }, 400);
+      }
+    }
+
+    // GET /api/projects/:id
+    const projMatch = pathname.match(/^\/api\/projects\/([\w-]+)$/);
+    if (projMatch && req.method === "GET") {
+      const p = getProject(projMatch[1]);
+      return p ? json(p) : json({ error: "not found" }, 404);
+    }
+
+    // POST /api/projects/:id/prune | /dedupe  (local ELT stages)
+    const stageMatch = pathname.match(
+      /^\/api\/projects\/([\w-]+)\/(prune|dedupe)$/,
+    );
+    if (stageMatch && req.method === "POST") {
+      const project = getProject(stageMatch[1]);
+      if (!project) return json({ error: "not found" }, 404);
+      const stage = stageMatch[2];
+      try {
+        const body = (await req.json().catch(() => ({}))) as Record<
+          string,
+          number
+        >;
+        const result =
+          stage === "prune"
+            ? await prune(project, body.minDim ?? project.settings.minDim)
+            : await dedupe(
+                project,
+                body.threshold ?? project.settings.dedupeThreshold,
+              );
+        project.stages[stage] = result;
+        project.status = stage;
+        saveProject(project);
+        return json({ stage, result });
+      } catch (e) {
+        return json({ error: e instanceof Error ? e.message : String(e) }, 500);
+      }
+    }
+
+    // POST /api/projects/:id/caption  → sync deduped set + run GB10 caption job
+    const capMatch = pathname.match(/^\/api\/projects\/([\w-]+)\/caption$/);
+    if (capMatch && req.method === "POST") {
+      const project = getProject(capMatch[1]);
+      if (!project) return json({ error: "not found" }, 404);
+      if (!tunnelUp()) return json({ error: "gb10 tunnel down" }, 503);
+      try {
+        const body = (await req.json().catch(() => ({}))) as {
+          trigger?: string;
+        };
+        await syncToGb10(
+          paths(project.id).workDir("01_deduped"),
+          `monocore/projects/${project.id}/input`,
+        );
+        const remote = await createJob("caption", {
+          project: project.id,
+          type: project.trainType,
+          trigger: body.trigger ?? "",
+        });
+        const id = uid();
+        insertJob({
+          id,
+          project_id: project.id,
+          stage: "caption",
+          status: "running",
+          remote_id: remote.id,
+          exit_code: null,
+          created_at: nowIso(),
+          finished_at: null,
+        });
+        return json({ jobId: id, remoteId: remote.id });
+      } catch (e) {
+        return json({ error: e instanceof Error ? e.message : String(e) }, 502);
+      }
     }
 
     // WS /ws/jobs/:id/logs

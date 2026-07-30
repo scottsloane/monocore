@@ -2,6 +2,17 @@
 
 Short, dated records of load-bearing choices. Newest first.
 
+## 2026-07-30 — Trainer runs containerized (NGC PyTorch)
+- ai-toolkit runs inside `nvcr.io/nvidia/pytorch:26.04-py3` (docker, no sudo —
+  user is in the `docker` group), **not** a bare-metal venv.
+- **Why:** the GB10 is Blackwell **sm_121** on **aarch64**; there is no easy
+  pip torch wheel for that target. The NGC container ships a working
+  torch 2.12 / CUDA 13.2 build (confirmed via the running vLLM container).
+  Mirrors the existing containerized vLLM setup.
+- ai-toolkit deps install **on top of** the container's torch/torchvision
+  (do not let pip reinstall torch). Model weights + project data mount from
+  `~/monocore/<project>`.
+
 ## 2026-07-30 — Initial architecture decisions
 - **Trainer engine: ai-toolkit (ostris).** Flux-first, modern, config-driven jobs
   with good LoRA + full fine-tune support; SDXL/Wan added later. Alternatives

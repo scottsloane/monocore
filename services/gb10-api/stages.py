@@ -1,12 +1,34 @@
 """Maps an ELT/training stage name to the command that runs it on the GB10.
 
-M0 only implements `noop` (connectivity check). Later milestones add: prune,
-dedupe, quality, subject, crop, caption, train, test.
+Implemented: `noop` (connectivity), `caption` (vLLM). Later: quality, subject,
+crop, train, test. Commands are arg lists (no shell) so params can't inject.
 """
 from __future__ import annotations
 
+import os
+import sys
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+
 
 def build_command(stage: str, params: dict) -> list[str]:
+    if stage == "caption":
+        if "project" not in params:
+            raise ValueError("caption stage requires params.project")
+        cmd = [
+            sys.executable,
+            os.path.join(_HERE, "caption.py"),
+            "--project",
+            str(params["project"]),
+            "--type",
+            str(params.get("type", "subject")),
+        ]
+        if params.get("trigger"):
+            cmd += ["--trigger", str(params["trigger"])]
+        if params.get("model"):
+            cmd += ["--model", str(params["model"])]
+        return cmd
+
     if stage == "noop":
         script = (
             'echo "[gb10] hello from $(hostname) ($(uname -m))"; '

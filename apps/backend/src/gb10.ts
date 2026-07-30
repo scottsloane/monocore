@@ -70,6 +70,36 @@ export async function health(): Promise<Gb10Health> {
   }
 }
 
+function run(cmd: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const p = Bun.spawn(cmd, { stdout: "pipe", stderr: "pipe" });
+    p.exited.then(async (code) => {
+      if (code === 0) return resolve();
+      const err = await new Response(p.stderr).text();
+      reject(new Error(`${cmd[0]} exited ${code}: ${err.trim()}`));
+    });
+  });
+}
+
+/**
+ * Mirror a local directory to a path under the GB10 home (relative to ~), e.g.
+ * `monocore/projects/<id>/input`. Creates the remote path and rsyncs contents.
+ */
+export async function syncToGb10(
+  localDir: string,
+  remoteRel: string,
+): Promise<void> {
+  const host = config.gb10.sshHost;
+  await run(["ssh", host, `mkdir -p ${remoteRel}`]);
+  await run([
+    "rsync",
+    "-az",
+    "--delete",
+    `${localDir.replace(/\/?$/, "")}/`,
+    `${host}:${remoteRel}/`,
+  ]);
+}
+
 export async function createJob(
   stage: string,
   params: Record<string, unknown> = {},
