@@ -128,6 +128,33 @@ export async function createJob(
   return (await res.json()) as { id: string };
 }
 
+export async function fetchManifest(
+  project: string,
+  outSub: string,
+): Promise<unknown> {
+  const res = await gb10Fetch(
+    `/elt/manifest?project=${project}&out_sub=${outSub}`,
+  );
+  if (!res.ok) throw new Error(`manifest fetch failed: HTTP ${res.status}`);
+  return res.json();
+}
+
+export async function eltOverride(body: {
+  project: string;
+  in_sub: string;
+  out_sub: string;
+  file: string;
+  keep: boolean;
+}): Promise<unknown> {
+  const res = await gb10Fetch("/elt/override", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`override failed: HTTP ${res.status}`);
+  return res.json();
+}
+
 export type RemoteJob = {
   id: string;
   stage: string;

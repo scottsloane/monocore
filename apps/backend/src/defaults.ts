@@ -8,6 +8,8 @@ export type Settings = {
   resolution: number;
   minDim: number;
   dedupeThreshold: number; // max Hamming distance to treat as duplicate
+  qualityThreshold: number; // min vLLM quality score (0-10) to keep
+  cropPadding: number; // fraction of the subject box added as margin
   steps: number;
   learningRate: number;
   rank: number; // LoRA rank
@@ -27,6 +29,14 @@ const TYPE_STEPS: Record<TrainType, number> = {
   face: 1800,
 };
 
+// Faces/people demand stricter quality; aesthetics are more permissive.
+const TYPE_QUALITY: Record<TrainType, number> = {
+  subject: 5,
+  aesthetic: 4,
+  person: 6,
+  face: 6,
+};
+
 export function resolveDefaults(
   baseModel: BaseModel,
   trainType: TrainType,
@@ -36,8 +46,11 @@ export function resolveDefaults(
     resolution: base.resolution,
     minDim: base.minDim,
     dedupeThreshold: 6,
+    qualityThreshold: TYPE_QUALITY[trainType] ?? 5,
+    // faces benefit from tighter crops; subjects want more context
+    cropPadding: trainType === "face" ? 0.2 : 0.12,
     steps: TYPE_STEPS[trainType] ?? 1500,
     learningRate: 1e-4,
-    rank: 16,
+    rank: trainType === "face" || trainType === "person" ? 24 : 16,
   };
 }

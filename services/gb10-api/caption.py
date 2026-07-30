@@ -52,12 +52,17 @@ def main() -> int:
     ap.add_argument("--project", required=True, help="project id")
     ap.add_argument("--type", default="subject")
     ap.add_argument("--trigger", default="", help="optional trigger token prefix")
+    ap.add_argument(
+        "--input-sub",
+        default="01_deduped",
+        help="work subdir to caption (latest completed ELT stage)",
+    )
     ap.add_argument("--model", default="Qwen/Qwen2.5-VL-32B-Instruct-AWQ")
     ap.add_argument("--vllm", default="http://127.0.0.1:8000")
     a = ap.parse_args()
 
     root = os.path.expanduser(f"~/monocore/projects/{a.project}")
-    in_dir = os.path.join(root, "input")
+    in_dir = os.path.join(root, "work", a.input_sub)
     out_dir = os.path.join(root, "dataset")
     os.makedirs(out_dir, exist_ok=True)
 

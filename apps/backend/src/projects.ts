@@ -45,6 +45,7 @@ export type Project = {
   name: string;
   baseModel: BaseModel;
   trainType: TrainType;
+  subject: string; // what the LoRA depicts (drives subject-match + crop)
   status: string;
   settings: Settings;
   source: { inputFolder: string; imageCount: number };
@@ -119,6 +120,7 @@ export type CreateInput = {
   baseModel: BaseModel;
   trainType: TrainType;
   inputFolder: string;
+  subject?: string;
 };
 
 export function createProject(input: CreateInput): Project {
@@ -146,6 +148,7 @@ export function createProject(input: CreateInput): Project {
     name,
     baseModel,
     trainType,
+    subject: input.subject?.trim() ?? "",
     status: "created",
     settings: resolveDefaults(baseModel, trainType),
     source: { inputFolder, imageCount: imgs.length },

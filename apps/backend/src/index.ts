@@ -11,9 +11,29 @@ import {
   streamLogs,
   syncToGb10,
   syncFromGb10,
+  fetchManifest,
+  eltOverride,
 } from "./gb10.ts";
 import { readdirSync, existsSync } from "fs";
 import { join } from "path";
+
+// ELT stage → (input work subdir, output work subdir). Prune/dedupe run locally
+// and produce 00_pruned/01_deduped; these vLLM stages chain on the GB10.
+const ELT: Record<string, { in: string; out: string }> = {
+  quality: { in: "01_deduped", out: "02_quality" },
+  subject: { in: "02_quality", out: "03_subject" },
+  crop: { in: "03_subject", out: "04_cropped" },
+};
+
+// The work subdir feeding caption/train: the latest ELT stage that has run.
+function latestSourceSub(project: {
+  stages: Record<string, unknown>;
+}): string {
+  if (project.stages.crop) return "04_cropped";
+  if (project.stages.subject) return "03_subject";
+  if (project.stages.quality) return "02_quality";
+  return "01_deduped";
+}
 import {
   createProject,
   listProjects,
@@ -158,6 +178,128 @@ const server = Bun.serve<WsData>({
       }
     }
 
+    // POST /api/projects/:id/elt/:stage  → run a vLLM ELT stage on the GB10
+    const eltRun = pathname.match(
+      /^\/api\/projects\/([\w-]+)\/elt\/(quality|subject|crop)$/,
+    );
+    if (eltRun && req.method === "POST") {
+      const project = getProject(eltRun[1]);
+      if (!project) return json({ error: "not found" }, 404);
+      if (!tunnelUp()) return json({ error: "gb10 tunnel down" }, 503);
+      const stage = eltRun[2];
+      const cfg = ELT[stage];
+      try {
+        const body = (await req.json().catch(() => ({}))) as {
+          threshold?: number;
+        };
+        // quality is the first GB10 stage — make sure the deduped set is up there
+        if (stage === "quality") {
+          await syncToGb10(
+            paths(project.id).workDir("01_deduped"),
+            `monocore/projects/${project.id}/work/01_deduped`,
+          );
+        }
+        const params: Record<string, unknown> = {
+          project: project.id,
+          in: cfg.in,
+          out: cfg.out,
+          subject: project.subject,
+          type: project.trainType,
+        };
+        if (stage === "quality")
+          params.threshold = body.threshold ?? project.settings.qualityThreshold;
+        if (stage === "crop") {
+          params.pad = project.settings.cropPadding;
+          params.min_side = project.settings.minDim;
+        }
+        const remote = await createJob(stage, params);
+        const id = uid();
+        insertJob({
+          id,
+          project_id: project.id,
+          stage,
+          status: "running",
+          remote_id: remote.id,
+          exit_code: null,
+          created_at: nowIso(),
+          finished_at: null,
+        });
+        return json({ jobId: id, remoteId: remote.id });
+      } catch (e) {
+        return json({ error: e instanceof Error ? e.message : String(e) }, 502);
+      }
+    }
+
+    // GET /api/projects/:id/elt/:stage/manifest  → fetch manifest, record stage
+    const eltManifest = pathname.match(
+      /^\/api\/projects\/([\w-]+)\/elt\/(quality|subject|crop)\/manifest$/,
+    );
+    if (eltManifest && req.method === "GET") {
+      const project = getProject(eltManifest[1]);
+      if (!project) return json({ error: "not found" }, 404);
+      const stage = eltManifest[2];
+      const cfg = ELT[stage];
+      try {
+        const manifest = (await fetchManifest(project.id, cfg.out)) as {
+          total: number;
+          kept: number;
+        };
+        // crop produces new images — pull them local for before/after review
+        if (stage === "crop") {
+          await syncFromGb10(
+            `monocore/projects/${project.id}/work/04_cropped`,
+            paths(project.id).workDir("04_cropped"),
+          );
+        }
+        project.stages[stage] = { total: manifest.total, kept: manifest.kept };
+        project.status = stage;
+        saveProject(project);
+        return json(manifest);
+      } catch (e) {
+        return json({ error: e instanceof Error ? e.message : String(e) }, 502);
+      }
+    }
+
+    // POST /api/projects/:id/elt/:stage/override  { file, keep }
+    const eltOv = pathname.match(
+      /^\/api\/projects\/([\w-]+)\/elt\/(quality|subject|crop)\/override$/,
+    );
+    if (eltOv && req.method === "POST") {
+      const project = getProject(eltOv[1]);
+      if (!project) return json({ error: "not found" }, 404);
+      const stage = eltOv[2];
+      const cfg = ELT[stage];
+      try {
+        const body = (await req.json()) as { file: string; keep: boolean };
+        const manifest = (await eltOverride({
+          project: project.id,
+          in_sub: cfg.in,
+          out_sub: cfg.out,
+          file: body.file,
+          keep: body.keep,
+        })) as { total: number; kept: number };
+        project.stages[stage] = { total: manifest.total, kept: manifest.kept };
+        saveProject(project);
+        return json(manifest);
+      } catch (e) {
+        return json({ error: e instanceof Error ? e.message : String(e) }, 502);
+      }
+    }
+
+    // GET /api/projects/:id/work-image?dir=SUB&f=NAME  → serve a review image
+    const workImg = pathname.match(/^\/api\/projects\/([\w-]+)\/work-image$/);
+    if (workImg && req.method === "GET") {
+      const dir = url.searchParams.get("dir") ?? "";
+      const f = url.searchParams.get("f") ?? "";
+      if (!["01_deduped", "04_cropped"].includes(dir))
+        return json({ error: "bad dir" }, 400);
+      if (!/^[\w.\-]+\.(png|jpe?g|webp|bmp|tiff?|avif)$/i.test(f))
+        return json({ error: "bad filename" }, 400);
+      const file = join(paths(workImg[1]).work, dir, f);
+      if (!existsSync(file)) return json({ error: "not found" }, 404);
+      return new Response(Bun.file(file), { headers: { ...CORS } });
+    }
+
     // POST /api/projects/:id/caption  → sync deduped set + run GB10 caption job
     const capMatch = pathname.match(/^\/api\/projects\/([\w-]+)\/caption$/);
     if (capMatch && req.method === "POST") {
@@ -168,15 +310,20 @@ const server = Bun.serve<WsData>({
         const body = (await req.json().catch(() => ({}))) as {
           trigger?: string;
         };
-        await syncToGb10(
-          paths(project.id).workDir("01_deduped"),
-          `monocore/projects/${project.id}/input`,
-        );
         const trigger = body.trigger ?? "";
+        const inputSub = latestSourceSub(project);
+        // If no ELT stage ran, the deduped set still needs to be on the GB10.
+        if (inputSub === "01_deduped") {
+          await syncToGb10(
+            paths(project.id).workDir("01_deduped"),
+            `monocore/projects/${project.id}/work/01_deduped`,
+          );
+        }
         const remote = await createJob("caption", {
           project: project.id,
           type: project.trainType,
           trigger,
+          input_sub: inputSub,
         });
         // remember the trigger so training reuses it as the activation token
         project.settings.trigger = trigger;

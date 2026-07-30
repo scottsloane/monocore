@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
@@ -76,6 +77,62 @@ async def cancel_job(job_id: str) -> dict:
         raise HTTPException(status_code=404, detail="job not found")
     await manager.cancel(job)
     return job.summary()
+
+
+@app.get("/elt/manifest")
+async def elt_manifest(project: str, out_sub: str) -> dict:
+    path = os.path.expanduser(
+        f"~/monocore/projects/{project}/work/{out_sub}/manifest.json"
+    )
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="manifest not found")
+    with open(path) as f:
+        return json.load(f)
+
+
+class Override(BaseModel):
+    project: str
+    in_sub: str
+    out_sub: str
+    file: str
+    keep: bool
+
+
+@app.post("/elt/override")
+async def elt_override(body: Override) -> dict:
+    """Manually accept/reject a file in an ELT stage: update the manifest keep flag
+    and add/remove the file from the stage output dir so downstream stages honor it.
+    """
+    work = os.path.expanduser(f"~/monocore/projects/{body.project}/work")
+    out_dir = os.path.join(work, body.out_sub)
+    manifest_path = os.path.join(out_dir, "manifest.json")
+    if not os.path.isfile(manifest_path):
+        raise HTTPException(status_code=404, detail="manifest not found")
+
+    with open(manifest_path) as f:
+        manifest = json.load(f)
+
+    found = False
+    for item in manifest["items"]:
+        if item["file"] == body.file:
+            item["keep"] = body.keep
+            found = True
+            break
+    if not found:
+        raise HTTPException(status_code=404, detail="file not in manifest")
+
+    dst = os.path.join(out_dir, body.file)
+    if body.keep:
+        src = os.path.join(work, body.in_sub, body.file)
+        if os.path.isfile(src):
+            shutil.copyfile(src, dst)
+    elif os.path.isfile(dst):
+        os.remove(dst)
+
+    manifest["kept"] = sum(1 for it in manifest["items"] if it.get("keep", True))
+    with open(manifest_path, "w") as f:
+        json.dump(manifest, f, indent=2)
+    return manifest
 
 
 @app.get("/jobs/{job_id}/logs")

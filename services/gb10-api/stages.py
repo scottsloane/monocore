@@ -47,6 +47,28 @@ def build_command(stage: str, params: dict) -> list[str]:
             "--n", str(params.get("n", 2)),
         ]
 
+    if stage in ("quality", "subject", "crop"):
+        if "project" not in params or "in" not in params or "out" not in params:
+            raise ValueError(f"{stage} stage requires params.project/in/out")
+        cmd = [
+            sys.executable, os.path.join(_HERE, "elt.py"),
+            "--stage", stage,
+            "--project", str(params["project"]),
+            "--in", str(params["in"]),
+            "--out", str(params["out"]),
+        ]
+        if params.get("subject"):
+            cmd += ["--subject", str(params["subject"])]
+        if params.get("type"):
+            cmd += ["--type", str(params["type"])]
+        if params.get("threshold") is not None:
+            cmd += ["--threshold", str(params["threshold"])]
+        if params.get("pad") is not None:
+            cmd += ["--pad", str(params["pad"])]
+        if params.get("min_side") is not None:
+            cmd += ["--min-side", str(params["min_side"])]
+        return cmd
+
     if stage == "caption":
         if "project" not in params:
             raise ValueError("caption stage requires params.project")
@@ -60,6 +82,8 @@ def build_command(stage: str, params: dict) -> list[str]:
         ]
         if params.get("trigger"):
             cmd += ["--trigger", str(params["trigger"])]
+        if params.get("input_sub"):
+            cmd += ["--input-sub", str(params["input_sub"])]
         if params.get("model"):
             cmd += ["--model", str(params["model"])]
         return cmd
