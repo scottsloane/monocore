@@ -45,6 +45,10 @@ Goal: one Flux subject LoRA produced from real images through the whole pipeline
 ## M4 — Polish & hardening
 - Project dashboard, artifact browser, model export/versioning.
 - Robust error handling, retries, disk/space guards, GB10 health checks.
+- **Trainer file ownership:** the trainer container runs as root, so its outputs
+  (LoRA, samples, latent cache) are root-owned on the GB10 and can't be managed by
+  the host user — run it `--user $(id -u):$(id -g)` (verify HF-cache write perms)
+  or delete project dirs via a root container.
 - Finalize `docs/ARCHITECTURE.md`; write `docs/OPERATIONS.md`.
 - **Milestone commit.**
 
