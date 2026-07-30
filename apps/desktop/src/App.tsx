@@ -1,176 +1,152 @@
-import { useEffect, useRef, useState } from "react";
-import { api, type Health, type Job } from "./api";
+import { useEffect, useState } from "react";
+import { api, type Health, type Project } from "./api";
+import { Dot, Card, Button, Badge } from "./ui";
+import { CreateWizard } from "./views/CreateWizard";
+import { ProjectView } from "./views/ProjectView";
 
-function Dot({ ok }: { ok: boolean | undefined }) {
-  const color = ok === undefined ? "bg-muted" : ok ? "bg-ok" : "bg-err";
+function StatusPill({ health }: { health?: Health }) {
+  const gb10 = health?.gb10;
+  const ok = gb10?.reachable;
   return (
-    <span className={`inline-block h-2.5 w-2.5 rounded-full ${color} shadow-[0_0_8px] shadow-current`} />
+    <div className="flex items-center gap-2 rounded-full border border-border bg-panel px-3 py-1.5 text-xs">
+      <Dot ok={health ? ok : undefined} />
+      <span className="text-muted">
+        {!health
+          ? "backend offline"
+          : ok
+            ? "GB10 connected"
+            : gb10?.tunnel
+              ? "GB10 unreachable"
+              : "tunnel down"}
+      </span>
+    </div>
   );
 }
 
-function StatusCard({ health, loading }: { health?: Health; loading: boolean }) {
-  const gb10 = health?.gb10;
+function ProjectCard({
+  project,
+  onOpen,
+}: {
+  project: Project;
+  onOpen: () => void;
+}) {
   return (
-    <div className="rounded-2xl border border-border bg-panel/80 p-5 backdrop-blur">
-      <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-sm font-semibold tracking-wide text-muted uppercase">System</h2>
-        {loading && <span className="text-xs text-muted">checking…</span>}
-      </div>
-      <ul className="space-y-3 text-sm">
-        <li className="flex items-center gap-3">
-          <Dot ok={health ? true : undefined} />
-          <span className="text-fg">Local backend</span>
-          <span className="ml-auto font-mono text-xs text-muted">
-            {health ? `v${health.version}` : "—"}
-          </span>
-        </li>
-        <li className="flex items-center gap-3">
-          <Dot ok={gb10?.tunnel} />
-          <span className="text-fg">GB10 SSH tunnel</span>
-          <span className="ml-auto font-mono text-xs text-muted">
-            {gb10?.tunnel ? "open" : "closed"}
-          </span>
-        </li>
-        <li className="flex items-center gap-3">
-          <Dot ok={gb10?.reachable} />
-          <span className="text-fg">GB10 job API</span>
-          <span className="ml-auto font-mono text-xs text-muted">
-            {gb10?.reachable ? "reachable" : gb10?.error ?? "—"}
-          </span>
-        </li>
-        <li className="flex items-start gap-3">
-          <Dot ok={gb10?.models?.length ? true : undefined} />
-          <span className="text-fg">vLLM models</span>
-          <span className="ml-auto max-w-[60%] text-right font-mono text-xs text-muted">
-            {gb10?.models?.length ? gb10.models.join(", ") : "—"}
-          </span>
-        </li>
-      </ul>
-    </div>
+    <Card className="cursor-pointer p-5 transition hover:border-accent/50" >
+      <button onClick={onOpen} className="w-full text-left">
+        <div className="flex items-center justify-between">
+          <h3 className="font-semibold text-fg">{project.name}</h3>
+          <Badge tone="accent">{project.baseModel}</Badge>
+        </div>
+        <div className="mt-2 flex items-center gap-2 text-sm text-muted">
+          <Badge>{project.trainType}</Badge>
+          <span>· {project.source.imageCount} images</span>
+        </div>
+        <div className="mt-3 text-xs text-muted/60">
+          stage: {project.status}
+        </div>
+      </button>
+    </Card>
   );
 }
 
 export default function App() {
   const [health, setHealth] = useState<Health>();
-  const [loading, setLoading] = useState(true);
-  const [lines, setLines] = useState<string[]>([]);
-  const [job, setJob] = useState<Job>();
-  const [running, setRunning] = useState(false);
-  const logRef = useRef<HTMLDivElement>(null);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [wizard, setWizard] = useState(false);
+  const [openId, setOpenId] = useState<string>();
 
-  async function refresh() {
-    setLoading(true);
+  async function refreshHealth() {
     try {
       setHealth(await api.health());
     } catch {
       setHealth(undefined);
-    } finally {
-      setLoading(false);
+    }
+  }
+  async function refreshProjects() {
+    try {
+      setProjects((await api.listProjects()).projects);
+    } catch {
+      /* backend may be starting */
     }
   }
 
   useEffect(() => {
-    refresh();
-    const t = setInterval(refresh, 5000);
+    refreshHealth();
+    refreshProjects();
+    const t = setInterval(refreshHealth, 5000);
     return () => clearInterval(t);
   }, []);
 
-  useEffect(() => {
-    logRef.current?.scrollTo(0, logRef.current.scrollHeight);
-  }, [lines]);
-
-  async function runNoop() {
-    setLines([]);
-    setJob(undefined);
-    setRunning(true);
-    try {
-      const { jobId } = await api.runNoop();
-      const close = api.streamLogs(
-        jobId,
-        (line) => setLines((l) => [...l, line]),
-        (j) => {
-          setJob(j);
-          setRunning(false);
-          close();
-        },
-      );
-    } catch (e) {
-      setLines((l) => [...l, `error: ${String(e)}`]);
-      setRunning(false);
-    }
-  }
+  const openProject = projects.find((p) => p.id === openId);
 
   return (
     <div className="mx-auto flex min-h-screen max-w-5xl flex-col gap-8 px-8 py-10">
       <header className="flex items-center justify-between">
-        <div>
-          <h1 className="bg-gradient-to-r from-accent-2 to-accent bg-clip-text text-3xl font-bold tracking-tight text-transparent">
+        <button
+          onClick={() => setOpenId(undefined)}
+          className="text-left"
+        >
+          <h1 className="bg-gradient-to-r from-accent-2 to-accent bg-clip-text text-2xl font-bold tracking-tight text-transparent">
             MONOCORE
           </h1>
-          <p className="mt-1 text-sm text-muted">Flux trainer · GB10 pipeline</p>
-        </div>
-        <button
-          onClick={refresh}
-          className="rounded-lg border border-border bg-panel px-3 py-1.5 text-xs text-muted transition hover:text-fg"
-        >
-          Refresh
+          <p className="mt-0.5 text-xs text-muted">Flux trainer · GB10 pipeline</p>
         </button>
+        <StatusPill health={health} />
       </header>
 
-      <div className="grid gap-6 md:grid-cols-[320px_1fr]">
-        <StatusCard health={health} loading={loading} />
-
-        <div className="flex flex-col rounded-2xl border border-border bg-panel/80 p-5 backdrop-blur">
-          <div className="mb-4 flex items-center justify-between">
+      {openProject ? (
+        <ProjectView
+          project={openProject}
+          onBack={() => {
+            setOpenId(undefined);
+            refreshProjects();
+          }}
+        />
+      ) : (
+        <>
+          <div className="flex items-center justify-between">
             <h2 className="text-sm font-semibold tracking-wide text-muted uppercase">
-              Connectivity check
+              Projects
             </h2>
-            <button
-              onClick={runNoop}
-              disabled={running || !health?.gb10.reachable}
-              className="rounded-lg bg-gradient-to-r from-accent to-accent-2 px-4 py-1.5 text-sm font-medium text-white shadow-lg shadow-accent/20 transition enabled:hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              {running ? "Running…" : "Run no-op job"}
-            </button>
+            <Button variant="primary" onClick={() => setWizard(true)}>
+              + New project
+            </Button>
           </div>
-          <div
-            ref={logRef}
-            className="h-64 overflow-auto rounded-lg border border-border bg-bg/60 p-3 font-mono text-xs leading-relaxed text-muted"
-          >
-            {lines.length === 0 ? (
-              <span className="text-muted/50">
-                Runs a no-op job on the GB10 and streams its logs back — proves the full
-                round-trip.
-              </span>
-            ) : (
-              lines.map((l, i) => (
-                <div key={i} className="whitespace-pre-wrap text-fg/90">
-                  {l}
-                </div>
-              ))
-            )}
-          </div>
-          {job && (
-            <div className="mt-3 text-xs">
-              <span
-                className={
-                  job.status === "succeeded"
-                    ? "text-ok"
-                    : job.status === "failed"
-                      ? "text-err"
-                      : "text-muted"
-                }
-              >
-                ● {job.status}
-              </span>
-              <span className="ml-2 font-mono text-muted">exit {job.exitCode ?? "—"}</span>
+
+          {projects.length === 0 ? (
+            <Card className="flex flex-col items-center gap-3 p-12 text-center">
+              <p className="text-muted">No projects yet.</p>
+              <Button variant="primary" onClick={() => setWizard(true)}>
+                Create your first project
+              </Button>
+            </Card>
+          ) : (
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {projects.map((p) => (
+                <ProjectCard
+                  key={p.id}
+                  project={p}
+                  onOpen={() => setOpenId(p.id)}
+                />
+              ))}
             </div>
           )}
-        </div>
-      </div>
+        </>
+      )}
+
+      {wizard && (
+        <CreateWizard
+          onCancel={() => setWizard(false)}
+          onCreated={(p) => {
+            setWizard(false);
+            setProjects((prev) => [p, ...prev]);
+            setOpenId(p.id);
+          }}
+        />
+      )}
 
       <footer className="mt-auto text-center text-xs text-muted/50">
-        M0 · scaffolding — see docs/PLAN.md
+        M1 · see docs/PLAN.md
       </footer>
     </div>
   );
