@@ -6,9 +6,12 @@ Short, dated records of load-bearing choices. Newest first.
 - **Multi-model via ai-toolkit arch flags:** Flux `is_flux: true`, SDXL
   `arch: 'sdxl'`, Wan `arch: 'wan21'`. Test generation uses diffusers
   `AutoPipelineForText2Image` so one path covers Flux + SDXL.
-- **VRAM auto-tuning for the 128GB unified memory:** LoRA runs unquantized (uses
-  the memory). SDXL (small) gets batch 4; **Flux keeps gradient checkpointing on**
-  to bound activation memory — a `gc:false` Flux profile is unsafe.
+- **VRAM auto-tuning for the 128GB unified memory:** SDXL (small) trains
+  unquantized at batch 4 — that's where the 128GB is spent. **Flux stays
+  quantized**: training it unquantized (~50GB bf16) drives load so high the GB10
+  deprioritizes SSH and the NVIDIA dashboard (the box isn't stuck — it's just
+  unresponsive under extreme load), which is bad for an interactive tool.
+  quantize=true is the M1-verified path and keeps the box usable while training.
 - **Single-job FIFO queue** in gb10-api so GPU/vLLM work never contends; jobs
   start `queued`. **Cancel** names train/test containers `monocore-<job_id>` and
   `docker kill`s them (a detached `docker run` won't stop on SIGTERM alone).
