@@ -9,9 +9,44 @@ import os
 import sys
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
+_HOME = os.path.expanduser("~")
+
+# Common `docker run` prefix for GPU stages using the trainer image.
+_TRAINER_DOCKER = [
+    "docker", "run", "--rm", "--gpus", "all", "--ipc=host",
+    "--ulimit", "memlock=-1", "--ulimit", "stack=67108864",
+    "-v", f"{_HOME}/.cache/huggingface:/root/.cache/huggingface",
+    "-v", f"{_HOME}/monocore:/workspace/monocore",
+    "monocore-trainer:latest",
+]
 
 
 def build_command(stage: str, params: dict) -> list[str]:
+    if stage == "train":
+        if "project" not in params:
+            raise ValueError("train stage requires params.project")
+        cmd = _TRAINER_DOCKER + [
+            "python", "/workspace/monocore/trainer/train.py",
+            "--project", str(params["project"]),
+            "--steps", str(params.get("steps", 1000)),
+            "--rank", str(params.get("rank", 16)),
+            "--lr", str(params.get("lr", 1e-4)),
+            "--resolution", str(params.get("resolution", 1024)),
+        ]
+        if params.get("trigger"):
+            cmd += ["--trigger", str(params["trigger"])]
+        return cmd
+
+    if stage == "test":
+        if "project" not in params:
+            raise ValueError("test stage requires params.project")
+        return _TRAINER_DOCKER + [
+            "python", "/workspace/monocore/trainer/generate.py",
+            "--project", str(params["project"]),
+            "--prompt", str(params.get("prompt", "a professional photograph")),
+            "--n", str(params.get("n", 2)),
+        ]
+
     if stage == "caption":
         if "project" not in params:
             raise ValueError("caption stage requires params.project")

@@ -100,6 +100,21 @@ export async function syncToGb10(
   ]);
 }
 
+/** Pull a directory from under the GB10 home (relative to ~) to a local dir. */
+export async function syncFromGb10(
+  remoteRel: string,
+  localDir: string,
+): Promise<void> {
+  const host = config.gb10.sshHost;
+  await run(["mkdir", "-p", localDir]);
+  await run([
+    "rsync",
+    "-az",
+    `${host}:${remoteRel}/`,
+    `${localDir.replace(/\/?$/, "")}/`,
+  ]);
+}
+
 export async function createJob(
   stage: string,
   params: Record<string, unknown> = {},

@@ -79,7 +79,70 @@ export function ProjectView({
   const [capState, setCapState] = useState<StageState>("idle");
   const [trigger, setTrigger] = useState("");
   const [capLines, setCapLines] = useState<string[]>([]);
+  const [trainState, setTrainState] = useState<StageState>("idle");
+  const [trainLines, setTrainLines] = useState<string[]>([]);
+  const [steps, setSteps] = useState<number>(initial.settings.steps);
+  const [testState, setTestState] = useState<StageState>("idle");
+  const [testLines, setTestLines] = useState<string[]>([]);
+  const [samples, setSamples] = useState<string[]>([]);
   const [err, setErr] = useState<string>();
+
+  function streamStage(
+    jobId: string,
+    setState: (s: StageState) => void,
+    setLines: (fn: (l: string[]) => string[]) => void,
+    onDone?: (ok: boolean) => void,
+  ) {
+    const close = api.streamLogs(
+      jobId,
+      (line) => setLines((l) => [...l, line]),
+      (job) => {
+        const ok = job.status === "succeeded";
+        setState(ok ? "done" : "error");
+        onDone?.(ok);
+        close();
+      },
+      (m) => {
+        setLines((l) => [...l, m]);
+        setState("error");
+      },
+    );
+  }
+
+  async function runTrain() {
+    setTrainState("running");
+    setTrainLines([]);
+    setErr(undefined);
+    try {
+      const { jobId } = await api.runTrain(project.id, steps);
+      streamStage(jobId, setTrainState, setTrainLines);
+    } catch (e) {
+      setErr(String(e));
+      setTrainState("error");
+    }
+  }
+
+  async function runTest() {
+    setTestState("running");
+    setTestLines([]);
+    setSamples([]);
+    setErr(undefined);
+    try {
+      const { jobId } = await api.runTest(project.id);
+      streamStage(jobId, setTestState, setTestLines, async (ok) => {
+        if (ok) {
+          try {
+            setSamples((await api.getSamples(project.id)).files);
+          } catch {
+            /* ignore */
+          }
+        }
+      });
+    } catch (e) {
+      setErr(String(e));
+      setTestState("error");
+    }
+  }
 
   async function refresh() {
     setProject(await api.getProject(project.id));
@@ -260,12 +323,83 @@ export function ProjectView({
 
         <StageRow
           index={5}
-          title="Train & Test"
-          desc="Train a LoRA and generate test images"
-          state="idle"
-          disabled
-          summary="Coming next — needs the Flux base model on the GB10"
-        />
+          title="Train"
+          desc="Train a Flux LoRA on the captioned dataset (GB10)"
+          state={trainState}
+          action={
+            <Button
+              onClick={runTrain}
+              disabled={trainState === "running" || capState !== "done"}
+              variant={trainState === "done" ? "subtle" : "primary"}
+            >
+              {trainState === "running"
+                ? "Training…"
+                : trainState === "done"
+                  ? "Re-run"
+                  : "Run"}
+            </Button>
+          }
+        >
+          <div className="mt-4 flex flex-col gap-3">
+            <Field label="Steps" hint="Training steps. Lower = faster test run.">
+              <TextInput
+                type="number"
+                value={steps}
+                onChange={(e) => setSteps(Number(e.currentTarget.value))}
+                className="max-w-[8rem]"
+              />
+            </Field>
+            {(trainState !== "idle" || trainLines.length > 0) && (
+              <LogConsole
+                lines={trainLines}
+                className="h-56"
+                empty="Waiting for the GB10 trainer…"
+              />
+            )}
+          </div>
+        </StageRow>
+
+        <StageRow
+          index={6}
+          title="Test"
+          desc="Generate sample images with the trained LoRA"
+          state={testState}
+          action={
+            <Button
+              onClick={runTest}
+              disabled={testState === "running" || trainState !== "done"}
+              variant={testState === "done" ? "subtle" : "primary"}
+            >
+              {testState === "running"
+                ? "Generating…"
+                : testState === "done"
+                  ? "Re-run"
+                  : "Run"}
+            </Button>
+          }
+        >
+          <div className="mt-4 flex flex-col gap-3">
+            {(testState !== "idle" || testLines.length > 0) && (
+              <LogConsole
+                lines={testLines}
+                className="h-40"
+                empty="Waiting for the GB10…"
+              />
+            )}
+            {samples.length > 0 && (
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                {samples.map((f) => (
+                  <img
+                    key={f}
+                    src={api.sampleUrl(project.id, f)}
+                    alt={f}
+                    className="aspect-square w-full rounded-lg border border-border object-cover"
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        </StageRow>
       </div>
     </div>
   );

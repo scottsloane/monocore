@@ -11,6 +11,7 @@ export type Settings = {
   steps: number;
   learningRate: number;
   rank: number; // LoRA rank
+  trigger?: string; // LoRA activation token (set when captioning)
 };
 
 const BASE: Record<BaseModel, Pick<Settings, "resolution" | "minDim">> = {

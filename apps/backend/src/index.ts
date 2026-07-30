@@ -10,7 +10,10 @@ import {
   createJob,
   streamLogs,
   syncToGb10,
+  syncFromGb10,
 } from "./gb10.ts";
+import { readdirSync, existsSync } from "fs";
+import { join } from "path";
 import {
   createProject,
   listProjects,
@@ -169,11 +172,15 @@ const server = Bun.serve<WsData>({
           paths(project.id).workDir("01_deduped"),
           `monocore/projects/${project.id}/input`,
         );
+        const trigger = body.trigger ?? "";
         const remote = await createJob("caption", {
           project: project.id,
           type: project.trainType,
-          trigger: body.trigger ?? "",
+          trigger,
         });
+        // remember the trigger so training reuses it as the activation token
+        project.settings.trigger = trigger;
+        saveProject(project);
         const id = uid();
         insertJob({
           id,
@@ -189,6 +196,88 @@ const server = Bun.serve<WsData>({
       } catch (e) {
         return json({ error: e instanceof Error ? e.message : String(e) }, 502);
       }
+    }
+
+    // POST /api/projects/:id/train | /test  (GB10 GPU stages)
+    const gpuMatch = pathname.match(
+      /^\/api\/projects\/([\w-]+)\/(train|test)$/,
+    );
+    if (gpuMatch && req.method === "POST") {
+      const project = getProject(gpuMatch[1]);
+      if (!project) return json({ error: "not found" }, 404);
+      if (!tunnelUp()) return json({ error: "gb10 tunnel down" }, 503);
+      const stage = gpuMatch[2];
+      try {
+        const body = (await req.json().catch(() => ({}))) as {
+          steps?: number;
+          prompt?: string;
+        };
+        const s = project.settings;
+        const trig = s.trigger?.trim();
+        const params =
+          stage === "train"
+            ? {
+                project: project.id,
+                steps: body.steps ?? s.steps,
+                rank: s.rank,
+                lr: s.learningRate,
+                resolution: s.resolution,
+                trigger: trig ?? "",
+              }
+            : {
+                project: project.id,
+                prompt:
+                  body.prompt ??
+                  `${trig ? trig + ", " : ""}a professional photograph, sharp focus`,
+                n: 2,
+              };
+        const remote = await createJob(stage, params);
+        const id = uid();
+        insertJob({
+          id,
+          project_id: project.id,
+          stage,
+          status: "running",
+          remote_id: remote.id,
+          exit_code: null,
+          created_at: nowIso(),
+          finished_at: null,
+        });
+        return json({ jobId: id, remoteId: remote.id });
+      } catch (e) {
+        return json({ error: e instanceof Error ? e.message : String(e) }, 502);
+      }
+    }
+
+    // GET /api/projects/:id/samples  → pull test images from GB10, list them
+    const samplesMatch = pathname.match(/^\/api\/projects\/([\w-]+)\/samples$/);
+    if (samplesMatch && req.method === "GET") {
+      const project = getProject(samplesMatch[1]);
+      if (!project) return json({ error: "not found" }, 404);
+      try {
+        const local = join(paths(project.id).output, "test");
+        await syncFromGb10(
+          `monocore/projects/${project.id}/output/test`,
+          local,
+        );
+        const files = existsSync(local)
+          ? readdirSync(local).filter((f) => /\.(png|jpe?g|webp)$/i.test(f))
+          : [];
+        return json({ files });
+      } catch (e) {
+        return json({ error: e instanceof Error ? e.message : String(e) }, 502);
+      }
+    }
+
+    // GET /api/projects/:id/sample?f=NAME  → serve a test image
+    const sampleMatch = pathname.match(/^\/api\/projects\/([\w-]+)\/sample$/);
+    if (sampleMatch && req.method === "GET") {
+      const f = url.searchParams.get("f") ?? "";
+      if (!/^[\w.\-]+\.(png|jpe?g|webp)$/i.test(f))
+        return json({ error: "bad filename" }, 400);
+      const file = join(paths(sampleMatch[1]).output, "test", f);
+      if (!existsSync(file)) return json({ error: "not found" }, 404);
+      return new Response(Bun.file(file), { headers: { ...CORS } });
     }
 
     // WS /ws/jobs/:id/logs

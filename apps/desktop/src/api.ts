@@ -121,6 +121,23 @@ export const api = {
       body: JSON.stringify({ trigger: trigger ?? "" }),
     }).then(j<{ jobId: string; remoteId: string }>),
 
+  runTrain: (id: string, steps?: number) =>
+    fetch(`${BASE}/api/projects/${id}/train`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(steps ? { steps } : {}),
+    }).then(j<{ jobId: string; remoteId: string }>),
+  runTest: (id: string, prompt?: string) =>
+    fetch(`${BASE}/api/projects/${id}/test`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(prompt ? { prompt } : {}),
+    }).then(j<{ jobId: string; remoteId: string }>),
+  getSamples: (id: string) =>
+    fetch(`${BASE}/api/projects/${id}/samples`).then(j<{ files: string[] }>),
+  sampleUrl: (id: string, f: string) =>
+    `${BASE}/api/projects/${id}/sample?f=${encodeURIComponent(f)}`,
+
   runNoop: () =>
     fetch(`${BASE}/api/jobs/noop`, { method: "POST" }).then(j<{ jobId: string }>),
 
