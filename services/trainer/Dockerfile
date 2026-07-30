@@ -20,6 +20,15 @@ RUN cat requirements_base.txt requirements.txt \
     && PIP_CONSTRAINT=/opt/torch-constraints.txt \
        pip install --no-cache-dir -r /opt/monocore-req.txt
 
+# opencv (pulled by ai-toolkit) needs libGL/glib at runtime.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Stub torchaudio (no wheel for this nv-torch; only audio models use it).
+COPY torchaudio_stub.py \
+    /usr/local/lib/python3.12/dist-packages/torchaudio.py
+
 ENV HF_HOME=/root/.cache/huggingface \
     HF_HUB_ENABLE_HF_TRANSFER=1 \
     PYTHONUNBUFFERED=1
