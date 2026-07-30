@@ -1,4 +1,8 @@
-"""In-process job registry and subprocess runner with live log fan-out."""
+"""Job registry with a FIFO worker (one job at a time) and live log fan-out.
+
+GPU work (train/test) and vLLM work (caption/ELT) are serialized through a single
+queue so they never contend for the GB10. Jobs start `queued`, then `running`.
+"""
 from __future__ import annotations
 
 import asyncio
@@ -6,7 +10,9 @@ import time
 import uuid
 from dataclasses import dataclass, field
 
-from stages import build_command
+from stages import build_command, container_name
+
+CONTAINER_STAGES = {"train", "test"}
 
 
 @dataclass
@@ -14,6 +20,7 @@ class Job:
     id: str
     stage: str
     params: dict
+    cmd: list[str]
     status: str = "queued"  # queued | running | succeeded | failed | canceled
     exit_code: int | None = None
     created_at: float = field(default_factory=time.time)
@@ -38,6 +45,8 @@ class Job:
 class JobManager:
     def __init__(self) -> None:
         self._jobs: dict[str, Job] = {}
+        self._queue: asyncio.Queue[str] = asyncio.Queue()
+        self._worker: asyncio.Task | None = None
 
     def get(self, job_id: str) -> Job | None:
         return self._jobs.get(job_id)
@@ -46,12 +55,26 @@ class JobManager:
         return [j.summary() for j in self._jobs.values()]
 
     def create(self, stage: str, params: dict) -> Job:
-        # Raises ValueError for unknown stages before we register the job.
-        cmd = build_command(stage, params)
-        job = Job(id=uuid.uuid4().hex[:12], stage=stage, params=params)
-        self._jobs[job.id] = job
-        asyncio.create_task(self._run(job, cmd))
+        job_id = uuid.uuid4().hex[:12]
+        cmd = build_command(stage, params, job_id)  # validates stage/params
+        job = Job(id=job_id, stage=stage, params=params, cmd=cmd)
+        self._jobs[job_id] = job
+        self._queue.put_nowait(job_id)
+        if self._worker is None:
+            self._worker = asyncio.create_task(self._run_worker())
+        pos = self._queue.qsize()
+        asyncio.create_task(
+            self._emit(job, f"[gb10] queued (position {pos})")
+        )
         return job
+
+    async def _run_worker(self) -> None:
+        while True:
+            job_id = await self._queue.get()
+            job = self._jobs.get(job_id)
+            if job is None or job.status == "canceled":
+                continue
+            await self._run(job)
 
     async def _emit(self, job: Job, line: str) -> None:
         async with job.lock:
@@ -59,11 +82,12 @@ class JobManager:
             for q in job.subscribers:
                 q.put_nowait(("line", line))
 
-    async def _run(self, job: Job, cmd: list[str]) -> None:
+    async def _run(self, job: Job) -> None:
         job.status = "running"
+        await self._emit(job, "[gb10] running")
         try:
             proc = await asyncio.create_subprocess_exec(
-                *cmd,
+                *job.cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
             )
@@ -88,15 +112,33 @@ class JobManager:
                 job.subscribers.clear()
 
     async def cancel(self, job: Job) -> None:
-        if job._proc and job.status == "running":
+        if job.status == "queued":
             job.status = "canceled"
+            job.finished_at = time.time()
+            job.done.set()
+            async with job.lock:
+                for q in job.subscribers:
+                    q.put_nowait(("done", None))
+                job.subscribers.clear()
+            return
+        if job.status != "running":
+            return
+        job.status = "canceled"
+        # Containerized jobs may detach from `docker run`; kill by name too.
+        if job.stage in CONTAINER_STAGES:
+            try:
+                p = await asyncio.create_subprocess_exec(
+                    "docker", "kill", container_name(job.id),
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                await p.wait()
+            except Exception:  # noqa: BLE001
+                pass
+        if job._proc:
             job._proc.terminate()
 
     async def subscribe(self, job: Job) -> asyncio.Queue:
-        """Return a queue primed with backlog then fed live events.
-
-        Held under the job lock so no line slips between replay and registration.
-        """
         q: asyncio.Queue = asyncio.Queue()
         async with job.lock:
             for line in job.lines:

@@ -13,7 +13,9 @@ import {
   syncFromGb10,
   fetchManifest,
   eltOverride,
+  cancelRemoteJob,
 } from "./gb10.ts";
+import { MODEL_PATHS, vramProfile, sampleEvery } from "./defaults.ts";
 import { readdirSync, existsSync } from "fs";
 import { join } from "path";
 
@@ -358,21 +360,36 @@ const server = Bun.serve<WsData>({
         const body = (await req.json().catch(() => ({}))) as {
           steps?: number;
           prompt?: string;
+          mode?: "lora" | "full";
         };
         const s = project.settings;
         const trig = s.trigger?.trim();
+        const arch = project.baseModel;
+        const model = MODEL_PATHS[arch];
+        const mode = body.mode ?? s.trainMode;
+        const vp = vramProfile(arch, mode);
+        const steps = body.steps ?? s.steps;
         const params =
           stage === "train"
             ? {
                 project: project.id,
-                steps: body.steps ?? s.steps,
+                arch,
+                mode,
+                model,
+                steps,
                 rank: s.rank,
                 lr: s.learningRate,
                 resolution: s.resolution,
+                batch: vp.batchSize,
+                quantize: vp.quantize,
+                gc: vp.gradientCheckpointing,
+                sample_every: sampleEvery(steps),
                 trigger: trig ?? "",
               }
             : {
                 project: project.id,
+                arch,
+                model,
                 prompt:
                   body.prompt ??
                   `${trig ? trig + ", " : ""}a professional photograph, sharp focus`,
@@ -427,6 +444,55 @@ const server = Bun.serve<WsData>({
       return new Response(Bun.file(file), { headers: { ...CORS } });
     }
 
+    // GET /api/projects/:id/train-samples  → pull ai-toolkit in-training samples
+    const trSamples = pathname.match(
+      /^\/api\/projects\/([\w-]+)\/train-samples$/,
+    );
+    if (trSamples && req.method === "GET") {
+      const project = getProject(trSamples[1]);
+      if (!project) return json({ error: "not found" }, 404);
+      try {
+        const local = join(paths(project.id).output, "train_samples");
+        await syncFromGb10(
+          `monocore/projects/${project.id}/output/${project.id}/samples`,
+          local,
+        );
+        const files = existsSync(local)
+          ? readdirSync(local)
+              .filter((f) => /\.(png|jpe?g|webp)$/i.test(f))
+              .sort()
+          : [];
+        return json({ files });
+      } catch (e) {
+        return json({ error: e instanceof Error ? e.message : String(e) }, 502);
+      }
+    }
+
+    // GET /api/projects/:id/train-sample?f=NAME  → serve a training sample
+    const trSample = pathname.match(/^\/api\/projects\/([\w-]+)\/train-sample$/);
+    if (trSample && req.method === "GET") {
+      const f = url.searchParams.get("f") ?? "";
+      if (!/^[\w.\-]+\.(png|jpe?g|webp)$/i.test(f))
+        return json({ error: "bad filename" }, 400);
+      const file = join(paths(trSample[1]).output, "train_samples", f);
+      if (!existsSync(file)) return json({ error: "not found" }, 404);
+      return new Response(Bun.file(file), { headers: { ...CORS } });
+    }
+
+    // POST /api/jobs/:id/cancel  → cancel a running/queued GB10 job
+    const cancelMatch = pathname.match(/^\/api\/jobs\/([\w-]+)\/cancel$/);
+    if (cancelMatch && req.method === "POST") {
+      const row = getJob(cancelMatch[1]);
+      if (!row?.remote_id) return json({ error: "not found" }, 404);
+      try {
+        await cancelRemoteJob(row.remote_id);
+        updateJob(row.id, { status: "canceled", finished_at: nowIso() });
+        return json({ ok: true });
+      } catch (e) {
+        return json({ error: e instanceof Error ? e.message : String(e) }, 502);
+      }
+    }
+
     // WS /ws/jobs/:id/logs
     const wsMatch = pathname.match(/^\/ws\/jobs\/([\w-]+)\/logs$/);
     if (wsMatch) {
@@ -456,7 +522,11 @@ const server = Bun.serve<WsData>({
             ws.send(JSON.stringify({ type: "line", line: evt.line }));
           } else {
             const status =
-              evt.job.status === "succeeded" ? "succeeded" : "failed";
+              evt.job.status === "succeeded"
+                ? "succeeded"
+                : evt.job.status === "canceled"
+                  ? "canceled"
+                  : "failed";
             updateJob(jobId, {
               status,
               exit_code: evt.job.exit_code ?? null,

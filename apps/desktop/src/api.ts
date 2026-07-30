@@ -26,6 +26,7 @@ export type Job = {
 
 export type BaseModel = "flux" | "sdxl" | "wan";
 export type TrainType = "subject" | "aesthetic" | "person" | "face";
+export type TrainMode = "lora" | "full";
 
 export type Settings = {
   resolution: number;
@@ -36,6 +37,7 @@ export type Settings = {
   steps: number;
   learningRate: number;
   rank: number;
+  trainMode: TrainMode;
   trigger?: string;
 };
 
@@ -163,12 +165,22 @@ export const api = {
   workImageUrl: (id: string, dir: string, f: string) =>
     `${BASE}/api/projects/${id}/work-image?dir=${dir}&f=${encodeURIComponent(f)}`,
 
-  runTrain: (id: string, steps?: number) =>
+  runTrain: (id: string, opts: { steps?: number; mode?: TrainMode } = {}) =>
     fetch(`${BASE}/api/projects/${id}/train`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(steps ? { steps } : {}),
+      body: JSON.stringify(opts),
     }).then(j<{ jobId: string; remoteId: string }>),
+  cancelJob: (jobId: string) =>
+    fetch(`${BASE}/api/jobs/${jobId}/cancel`, { method: "POST" }).then(
+      j<{ ok: boolean }>,
+    ),
+  getTrainSamples: (id: string) =>
+    fetch(`${BASE}/api/projects/${id}/train-samples`).then(
+      j<{ files: string[] }>,
+    ),
+  trainSampleUrl: (id: string, f: string) =>
+    `${BASE}/api/projects/${id}/train-sample?f=${encodeURIComponent(f)}`,
   runTest: (id: string, prompt?: string) =>
     fetch(`${BASE}/api/projects/${id}/test`, {
       method: "POST",

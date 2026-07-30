@@ -162,6 +162,11 @@ export type RemoteJob = {
   exit_code?: number | null;
 };
 
+export async function cancelRemoteJob(id: string): Promise<void> {
+  const res = await gb10Fetch(`/jobs/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`cancel failed: HTTP ${res.status}`);
+}
+
 export async function getRemoteJob(id: string): Promise<RemoteJob> {
   const res = await gb10Fetch(`/jobs/${id}`);
   if (!res.ok) throw new Error(`GB10 getJob failed: HTTP ${res.status}`);

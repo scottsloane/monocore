@@ -1,7 +1,7 @@
-"""Test generation with the trained LoRA (diffusers FluxPipeline).
+"""Test generation with the trained LoRA (arch-aware via diffusers AutoPipeline).
 
-Runs inside the monocore-trainer container. Loads FLUX.1-dev + the project's
-freshly trained LoRA and writes sample images to .../output/test.
+Loads the base model + the project's freshly trained LoRA and writes sample images
+to .../output/test. Works for Flux and SDXL (AutoPipeline picks the class).
 """
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import os
 import sys
 
 import torch
-from diffusers import FluxPipeline
+from diffusers import AutoPipelineForText2Image
 
 
 def newest_lora(output_dir: str) -> str | None:
@@ -23,11 +23,15 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--project", required=True)
     ap.add_argument("--prompt", required=True)
-    ap.add_argument("--n", type=int, default=2)
-    ap.add_argument("--steps", type=int, default=24)
-    ap.add_argument("--guidance", type=float, default=3.5)
+    ap.add_argument("--arch", default="flux", choices=["flux", "sdxl"])
     ap.add_argument("--model", default="black-forest-labs/FLUX.1-dev")
+    ap.add_argument("--n", type=int, default=2)
+    ap.add_argument("--steps", type=int, default=0)
+    ap.add_argument("--guidance", type=float, default=0)
     a = ap.parse_args()
+
+    steps = a.steps or (24 if a.arch == "flux" else 28)
+    guidance = a.guidance or (3.5 if a.arch == "flux" else 7.0)
 
     root = f"/workspace/monocore/projects/{a.project}"
     output = f"{root}/output"
@@ -35,10 +39,9 @@ def main() -> int:
     os.makedirs(test_dir, exist_ok=True)
 
     lora = newest_lora(output)
-    print(f"[test] lora: {lora or 'NONE (base model only)'}", flush=True)
-
+    print(f"[test] arch={a.arch} lora={lora or 'NONE (base only)'}", flush=True)
     print(f"[test] loading {a.model} …", flush=True)
-    pipe = FluxPipeline.from_pretrained(a.model, torch_dtype=torch.bfloat16)
+    pipe = AutoPipelineForText2Image.from_pretrained(a.model, torch_dtype=torch.bfloat16)
     pipe = pipe.to("cuda")
     if lora:
         pipe.load_lora_weights(lora)
@@ -47,8 +50,8 @@ def main() -> int:
         print(f"[test] generating {i + 1}/{a.n} …", flush=True)
         img = pipe(
             a.prompt,
-            num_inference_steps=a.steps,
-            guidance_scale=a.guidance,
+            num_inference_steps=steps,
+            guidance_scale=guidance,
             generator=torch.Generator("cuda").manual_seed(1000 + i),
         ).images[0]
         path = os.path.join(test_dir, f"test_{i}.png")

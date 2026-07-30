@@ -1,15 +1,24 @@
 import { useState } from "react";
-import { api, type Project } from "../api";
+import { api, type Project, type TrainMode } from "../api";
 import {
   Button,
   Badge,
   LogConsole,
   TextInput,
   Field,
+  Segmented,
   StageRow,
   type StageState,
 } from "../ui";
 import { EltStage } from "./EltStage";
+
+// Human summary of the VRAM auto-tuning for the ~128GB GB10.
+function vramSummary(base: string, mode: TrainMode): string {
+  if (mode === "full") return "full fine-tune · gradient checkpointing";
+  if (base === "sdxl") return "LoRA · bf16 · batch 4 (uses the 128GB)";
+  if (base === "wan") return "LoRA · quantized (14B video model)";
+  return "LoRA · bf16, no quantize (uses the 128GB)";
+}
 
 export function ProjectView({
   project: initial,
@@ -36,6 +45,9 @@ export function ProjectView({
   const [trainState, setTrainState] = useState<StageState>("idle");
   const [trainLines, setTrainLines] = useState<string[]>([]);
   const [steps, setSteps] = useState<number>(initial.settings.steps);
+  const [mode, setMode] = useState<TrainMode>(initial.settings.trainMode);
+  const [trainJob, setTrainJob] = useState<string>();
+  const [trainSamples, setTrainSamples] = useState<string[]>([]);
   const [testState, setTestState] = useState<StageState>("idle");
   const [testLines, setTestLines] = useState<string[]>([]);
   const [samples, setSamples] = useState<string[]>([]);
@@ -99,13 +111,33 @@ export function ProjectView({
   async function runTrain() {
     setTrainState("running");
     setTrainLines([]);
+    setTrainSamples([]);
     setErr(undefined);
     try {
-      const { jobId } = await api.runTrain(project.id, steps);
-      streamStage(jobId, setTrainState, setTrainLines);
+      const { jobId } = await api.runTrain(project.id, { steps, mode });
+      setTrainJob(jobId);
+      streamStage(jobId, setTrainState, setTrainLines, async (ok) => {
+        if (ok) {
+          try {
+            setTrainSamples((await api.getTrainSamples(project.id)).files);
+          } catch {
+            /* ignore */
+          }
+        }
+      });
     } catch (e) {
       setErr(String(e));
       setTrainState("error");
+    }
+  }
+
+  async function cancelTrain() {
+    if (!trainJob) return;
+    try {
+      await api.cancelJob(trainJob);
+      setTrainLines((l) => [...l, "[canceling…]"]);
+    } catch (e) {
+      setErr(String(e));
     }
   }
 
@@ -269,30 +301,64 @@ export function ProjectView({
         <StageRow
           index={8}
           title="Train"
-          desc="Train a Flux LoRA on the captioned dataset (GB10)"
+          desc={`Train a ${project.baseModel.toUpperCase()} model on the captioned dataset (GB10)`}
           state={trainState}
           disabled={capState !== "done"}
+          summary={`${vramSummary(project.baseModel, mode)}`}
           action={
-            <Button
-              onClick={runTrain}
-              disabled={trainState === "running" || capState !== "done"}
-              variant={trainState === "done" ? "subtle" : "primary"}
-            >
-              {trainState === "running" ? "Training…" : trainState === "done" ? "Re-run" : "Run"}
-            </Button>
+            trainState === "running" ? (
+              <Button variant="ghost" onClick={cancelTrain}>
+                Cancel
+              </Button>
+            ) : (
+              <Button
+                onClick={runTrain}
+                disabled={capState !== "done"}
+                variant={trainState === "done" ? "subtle" : "primary"}
+              >
+                {trainState === "done" ? "Re-run" : "Run"}
+              </Button>
+            )
           }
         >
           <div className="mt-4 flex flex-col gap-3">
-            <Field label="Steps" hint="Training steps. Lower = faster test run.">
-              <TextInput
-                type="number"
-                value={steps}
-                onChange={(e) => setSteps(Number(e.currentTarget.value))}
-                className="max-w-[8rem]"
-              />
-            </Field>
+            <div className="flex flex-wrap items-end gap-4">
+              <Field label="Mode">
+                <Segmented<TrainMode>
+                  value={mode}
+                  onChange={setMode}
+                  options={[
+                    { value: "lora", label: "LoRA" },
+                    { value: "full", label: "Full fine-tune" },
+                  ]}
+                />
+              </Field>
+              <Field label="Steps" hint="Lower = faster test run.">
+                <TextInput
+                  type="number"
+                  value={steps}
+                  onChange={(e) => setSteps(Number(e.currentTarget.value))}
+                  className="max-w-[8rem]"
+                />
+              </Field>
+            </div>
             {(trainState !== "idle" || trainLines.length > 0) && (
               <LogConsole lines={trainLines} className="h-56" empty="Waiting for the GB10 trainer…" />
+            )}
+            {trainSamples.length > 0 && (
+              <div>
+                <p className="mb-2 text-xs text-muted">In-training samples</p>
+                <div className="grid grid-cols-3 gap-3 sm:grid-cols-4">
+                  {trainSamples.map((f) => (
+                    <img
+                      key={f}
+                      src={api.trainSampleUrl(project.id, f)}
+                      alt={f}
+                      className="aspect-square w-full rounded-lg border border-border object-cover"
+                    />
+                  ))}
+                </div>
+              </div>
             )}
           </div>
         </StageRow>

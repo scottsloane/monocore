@@ -11,27 +11,41 @@ import sys
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _HOME = os.path.expanduser("~")
 
-# Common `docker run` prefix for GPU stages using the trainer image.
-_TRAINER_DOCKER = [
-    "docker", "run", "--rm", "--gpus", "all", "--ipc=host",
-    "--ulimit", "memlock=-1", "--ulimit", "stack=67108864",
-    "-v", f"{_HOME}/.cache/huggingface:/root/.cache/huggingface",
-    "-v", f"{_HOME}/monocore:/workspace/monocore",
-    "monocore-trainer:latest",
-]
+# `docker run` prefix for GPU stages. Named `monocore-<job_id>` so the job can be
+# cancelled with `docker kill` even if the run process is detached.
+def container_name(job_id: str | None) -> str:
+    return f"monocore-{job_id}" if job_id else "monocore-job"
 
 
-def build_command(stage: str, params: dict) -> list[str]:
+def _trainer_docker(job_id: str | None) -> list[str]:
+    return [
+        "docker", "run", "--rm", "--name", container_name(job_id),
+        "--gpus", "all", "--ipc=host",
+        "--ulimit", "memlock=-1", "--ulimit", "stack=67108864",
+        "-v", f"{_HOME}/.cache/huggingface:/root/.cache/huggingface",
+        "-v", f"{_HOME}/monocore:/workspace/monocore",
+        "monocore-trainer:latest",
+    ]
+
+
+def build_command(stage: str, params: dict, job_id: str | None = None) -> list[str]:
     if stage == "train":
         if "project" not in params:
             raise ValueError("train stage requires params.project")
-        cmd = _TRAINER_DOCKER + [
+        cmd = _trainer_docker(job_id) + [
             "python", "/workspace/monocore/trainer/train.py",
             "--project", str(params["project"]),
+            "--arch", str(params.get("arch", "flux")),
+            "--mode", str(params.get("mode", "lora")),
+            "--model", str(params["model"]),
             "--steps", str(params.get("steps", 1000)),
             "--rank", str(params.get("rank", 16)),
             "--lr", str(params.get("lr", 1e-4)),
             "--resolution", str(params.get("resolution", 1024)),
+            "--batch", str(params.get("batch", 1)),
+            "--quantize", str(params.get("quantize", False)),
+            "--gc", str(params.get("gc", True)),
+            "--sample-every", str(params.get("sample_every", 0)),
         ]
         if params.get("trigger"):
             cmd += ["--trigger", str(params["trigger"])]
@@ -40,11 +54,13 @@ def build_command(stage: str, params: dict) -> list[str]:
     if stage == "test":
         if "project" not in params:
             raise ValueError("test stage requires params.project")
-        return _TRAINER_DOCKER + [
+        return _trainer_docker(job_id) + [
             "python", "/workspace/monocore/trainer/generate.py",
             "--project", str(params["project"]),
             "--prompt", str(params.get("prompt", "a professional photograph")),
             "--n", str(params.get("n", 2)),
+            "--arch", str(params.get("arch", "flux")),
+            "--model", str(params.get("model", "black-forest-labs/FLUX.1-dev")),
         ]
 
     if stage in ("quality", "subject", "crop"):

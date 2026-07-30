@@ -4,6 +4,8 @@ export const TRAIN_TYPES = ["subject", "aesthetic", "person", "face"] as const;
 export type BaseModel = (typeof BASE_MODELS)[number];
 export type TrainType = (typeof TRAIN_TYPES)[number];
 
+export type TrainMode = "lora" | "full";
+
 export type Settings = {
   resolution: number;
   minDim: number;
@@ -13,8 +15,45 @@ export type Settings = {
   steps: number;
   learningRate: number;
   rank: number; // LoRA rank
+  trainMode: TrainMode;
   trigger?: string; // LoRA activation token (set when captioning)
 };
+
+// HF repo per base model (ai-toolkit arch == baseModel).
+export const MODEL_PATHS: Record<BaseModel, string> = {
+  flux: "black-forest-labs/FLUX.1-dev",
+  sdxl: "stabilityai/stable-diffusion-xl-base-1.0",
+  wan: "Wan-AI/Wan2.1-T2V-14B-Diffusers",
+};
+
+export type VramProfile = {
+  quantize: boolean;
+  gradientCheckpointing: boolean;
+  batchSize: number;
+};
+
+// Tuned for the GB10's ~128GB unified memory: LoRA runs unquantized with room to
+// spare (bigger batch for the smaller SDXL); full fine-tunes stay conservative.
+export function vramProfile(base: BaseModel, mode: TrainMode): VramProfile {
+  if (mode === "full") {
+    return {
+      quantize: base === "flux" || base === "wan",
+      gradientCheckpointing: true,
+      batchSize: 1,
+    };
+  }
+  const lora: Record<BaseModel, VramProfile> = {
+    flux: { quantize: false, gradientCheckpointing: false, batchSize: 1 },
+    sdxl: { quantize: false, gradientCheckpointing: false, batchSize: 4 },
+    wan: { quantize: true, gradientCheckpointing: true, batchSize: 1 },
+  };
+  return lora[base];
+}
+
+// In-training sampling cadence: end-only for short runs, quarterly for long ones.
+export function sampleEvery(steps: number): number {
+  return steps <= 400 ? steps : Math.floor(steps / 4);
+}
 
 const BASE: Record<BaseModel, Pick<Settings, "resolution" | "minDim">> = {
   flux: { resolution: 1024, minDim: 768 },
@@ -52,5 +91,6 @@ export function resolveDefaults(
     steps: TYPE_STEPS[trainType] ?? 1500,
     learningRate: 1e-4,
     rank: trainType === "face" || trainType === "person" ? 24 : 16,
+    trainMode: "lora",
   };
 }
