@@ -2,6 +2,20 @@
 
 Short, dated records of load-bearing choices. Newest first.
 
+## 2026-07-30 — M2 ELT design
+- **vLLM JSON mode** (`response_format: json_object`) for quality/subject/crop —
+  Qwen2.5-VL otherwise "thinks out loud" and gets cut off before emitting JSON.
+- **Manifest-driven review.** Each ELT stage writes `manifest.json` (per-image
+  score/match/box + keep flag) and copies only kept images to its output dir, so
+  the next stage naturally processes only survivors. Manual override flips the
+  keep flag and adds/removes the file (GB10 `/elt/override`).
+- **Serve review thumbnails from the local deduped set.** Quality/Subject don't
+  alter pixels, so their kept images are the same files already in local
+  `01_deduped` — only small manifests are pulled back. Only **Crop** produces new
+  images, which are rsynced back for before/after review.
+- **Crop declines to crop below the training resolution** (min-side guard) and on
+  near-full-frame boxes — avoids upscaling tiny regions.
+
 ## 2026-07-30 — Trainer runs containerized (NGC PyTorch)
 - ai-toolkit runs inside `nvcr.io/nvidia/pytorch:26.04-py3` (docker, no sudo —
   user is in the `docker` group), **not** a bare-metal venv.

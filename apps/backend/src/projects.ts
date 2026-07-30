@@ -79,6 +79,18 @@ export function listImages(dir: string): string[] {
     .map((f) => join(dir, f));
 }
 
+// Drop empty/NaN override values so they fall back to the tuned defaults.
+function cleanOverrides(o?: Partial<Settings>): Partial<Settings> {
+  const out: Partial<Settings> = {};
+  if (!o) return out;
+  for (const [k, v] of Object.entries(o)) {
+    if (v === undefined || v === null) continue;
+    if (typeof v === "number" && !Number.isFinite(v)) continue;
+    (out as Record<string, unknown>)[k] = v;
+  }
+  return out;
+}
+
 function slug(name: string): string {
   return (
     name
@@ -121,6 +133,7 @@ export type CreateInput = {
   trainType: TrainType;
   inputFolder: string;
   subject?: string;
+  overrides?: Partial<Settings>; // advanced: override auto-tuned defaults
 };
 
 export function createProject(input: CreateInput): Project {
@@ -150,7 +163,7 @@ export function createProject(input: CreateInput): Project {
     trainType,
     subject: input.subject?.trim() ?? "",
     status: "created",
-    settings: resolveDefaults(baseModel, trainType),
+    settings: { ...resolveDefaults(baseModel, trainType), ...cleanOverrides(input.overrides) },
     source: { inputFolder, imageCount: imgs.length },
     stages: {},
     createdAt: now,

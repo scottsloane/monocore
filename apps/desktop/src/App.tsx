@@ -146,7 +146,7 @@ export default function App() {
       )}
 
       <footer className="mt-auto text-center text-xs text-muted/50">
-        M1 · see docs/PLAN.md
+        M2 · see docs/PLAN.md
       </footer>
     </div>
   );

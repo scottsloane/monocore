@@ -4,12 +4,13 @@ A Flux/SDXL trainer with a full image **ETL pipeline** and a modern desktop UI.
 It prepares an image dataset (prune → dedupe → quality → subject → crop → caption),
 trains a model on a remote **NVIDIA GB10**, and tests it with generation.
 
-> Status: **M1 — end-to-end thin slice complete.** A project goes through the
-> full pipeline — create → prune → dedupe → caption (vLLM) → train a Flux LoRA →
-> test generation — all driven from the dark desktop UI, with the GB10 doing the
-> heavy work. Verified: a rank-16 FLUX.1-dev LoRA trained on the GB10 and used to
-> generate 1024px test images pulled back into the app.
-> Next: **M2**, full ELT quality (quality/subject/crop) + review UI. See
+> Status: **M2 — full ELT quality complete.** The pipeline now runs the complete
+> ELT: prune → dedupe → **quality** (vLLM score/threshold) → **subject/aesthetic**
+> match → **subject-aware crop** → caption → train → test, each with a thumbnail
+> review grid and manual accept/reject overrides. Settings are auto-tuned per
+> (base model × training type) with an Advanced gate. All driven from the dark
+> desktop UI; the GB10 does the heavy work.
+> Next: **M3**, multi-model (SDXL/Wan) + training-type presets + VRAM tuning. See
 > [`docs/PLAN.md`](docs/PLAN.md).
 
 ## Architecture (short)

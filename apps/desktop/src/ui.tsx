@@ -131,6 +131,65 @@ export function Badge({
   );
 }
 
+export type StageState = "idle" | "running" | "done" | "error";
+
+export function StageRow({
+  index,
+  title,
+  desc,
+  state,
+  summary,
+  action,
+  disabled,
+  children,
+}: {
+  index: number;
+  title: string;
+  desc: string;
+  state: StageState;
+  summary?: string;
+  action?: ReactNode;
+  disabled?: boolean;
+  children?: ReactNode;
+}) {
+  const badge =
+    state === "done" ? (
+      <Badge tone="ok">done</Badge>
+    ) : state === "running" ? (
+      <Badge tone="accent">running…</Badge>
+    ) : state === "error" ? (
+      <Badge tone="err">error</Badge>
+    ) : disabled ? (
+      <Badge tone="muted">locked</Badge>
+    ) : (
+      <Badge tone="muted">pending</Badge>
+    );
+  return (
+    <Card className={`p-4 ${disabled ? "opacity-50" : ""}`}>
+      <div className="flex items-center gap-4">
+        <div
+          className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-sm font-semibold ${
+            state === "done"
+              ? "border-ok/40 bg-ok/10 text-ok"
+              : "border-border bg-panel-2 text-muted"
+          }`}
+        >
+          {index}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <h3 className="font-medium text-fg">{title}</h3>
+            {badge}
+          </div>
+          <p className="truncate text-sm text-muted">{summary ?? desc}</p>
+        </div>
+        {action}
+      </div>
+      {children}
+    </Card>
+  );
+}
+
 export function LogConsole({
   lines,
   empty,

@@ -31,9 +31,12 @@ export type Settings = {
   resolution: number;
   minDim: number;
   dedupeThreshold: number;
+  qualityThreshold: number;
+  cropPadding: number;
   steps: number;
   learningRate: number;
   rank: number;
+  trigger?: string;
 };
 
 export type PruneResult = {
@@ -49,11 +52,29 @@ export type DedupeResult = {
   threshold: number;
 };
 
+export type EltStage = "quality" | "subject" | "crop";
+export type EltItem = {
+  file: string;
+  keep: boolean;
+  score?: number;
+  reason?: string;
+  match?: boolean;
+  cropped?: boolean;
+  box?: number[];
+};
+export type EltManifest = {
+  stage: string;
+  total: number;
+  kept: number;
+  items: EltItem[];
+};
+
 export type Project = {
   id: string;
   name: string;
   baseModel: BaseModel;
   trainType: TrainType;
+  subject: string;
   status: string;
   settings: Settings;
   source: { inputFolder: string; imageCount: number };
@@ -72,6 +93,8 @@ export type CreateInput = {
   baseModel: BaseModel;
   trainType: TrainType;
   inputFolder: string;
+  subject?: string;
+  overrides?: Partial<Settings>;
 };
 
 async function j<T>(res: Response): Promise<T> {
@@ -120,6 +143,25 @@ export const api = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ trigger: trigger ?? "" }),
     }).then(j<{ jobId: string; remoteId: string }>),
+
+  runElt: (id: string, stage: EltStage, body: Record<string, number> = {}) =>
+    fetch(`${BASE}/api/projects/${id}/elt/${stage}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }).then(j<{ jobId: string; remoteId: string }>),
+  getEltManifest: (id: string, stage: EltStage) =>
+    fetch(`${BASE}/api/projects/${id}/elt/${stage}/manifest`).then(
+      j<EltManifest>,
+    ),
+  eltOverride: (id: string, stage: EltStage, file: string, keep: boolean) =>
+    fetch(`${BASE}/api/projects/${id}/elt/${stage}/override`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ file, keep }),
+    }).then(j<EltManifest>),
+  workImageUrl: (id: string, dir: string, f: string) =>
+    `${BASE}/api/projects/${id}/work-image?dir=${dir}&f=${encodeURIComponent(f)}`,
 
   runTrain: (id: string, steps?: number) =>
     fetch(`${BASE}/api/projects/${id}/train`, {
