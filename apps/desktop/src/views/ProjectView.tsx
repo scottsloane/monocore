@@ -17,7 +17,7 @@ function vramSummary(base: string, mode: TrainMode): string {
   if (mode === "full") return "full fine-tune · gradient checkpointing";
   if (base === "sdxl") return "LoRA · bf16 · batch 4 (uses the 128GB)";
   if (base === "wan") return "LoRA · quantized (14B video model)";
-  return "LoRA · bf16, no quantize (uses the 128GB)";
+  return "LoRA · quantized (stable for Flux's size)";
 }
 
 export function ProjectView({

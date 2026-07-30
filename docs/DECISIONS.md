@@ -2,6 +2,20 @@
 
 Short, dated records of load-bearing choices. Newest first.
 
+## 2026-07-30 — M3 training depth
+- **Multi-model via ai-toolkit arch flags:** Flux `is_flux: true`, SDXL
+  `arch: 'sdxl'`, Wan `arch: 'wan21'`. Test generation uses diffusers
+  `AutoPipelineForText2Image` so one path covers Flux + SDXL.
+- **VRAM auto-tuning for the 128GB unified memory:** LoRA runs unquantized (uses
+  the memory). SDXL (small) gets batch 4; **Flux keeps gradient checkpointing on**
+  to bound activation memory — a `gc:false` Flux profile is unsafe.
+- **Single-job FIFO queue** in gb10-api so GPU/vLLM work never contends; jobs
+  start `queued`. **Cancel** names train/test containers `monocore-<job_id>` and
+  `docker kill`s them (a detached `docker run` won't stop on SIGTERM alone).
+- **Resume is automatic** (ai-toolkit reloads an existing checkpoint), but
+  re-running at the same step count can hang in latent caching — treat re-run as
+  "continue training with more steps", not "re-run identical".
+
 ## 2026-07-30 — M2 ELT design
 - **vLLM JSON mode** (`response_format: json_object`) for quality/subject/crop —
   Qwen2.5-VL otherwise "thinks out loud" and gets cut off before emitting JSON.

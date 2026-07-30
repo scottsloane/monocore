@@ -43,7 +43,11 @@ export function vramProfile(base: BaseModel, mode: TrainMode): VramProfile {
     };
   }
   const lora: Record<BaseModel, VramProfile> = {
-    flux: { quantize: false, gradientCheckpointing: false, batchSize: 1 },
+    // Flux is huge (~50GB unquantized) and destabilizes the GB10's unified
+    // memory during load; quantize keeps it stable (and still fast). SDXL is
+    // small enough to run full-precision with a big batch — that's where we
+    // spend the 128GB.
+    flux: { quantize: true, gradientCheckpointing: true, batchSize: 1 },
     sdxl: { quantize: false, gradientCheckpointing: false, batchSize: 4 },
     wan: { quantize: true, gradientCheckpointing: true, batchSize: 1 },
   };
