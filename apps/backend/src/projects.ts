@@ -7,6 +7,7 @@ import {
   readdirSync,
   writeFileSync,
   existsSync,
+  rmSync,
 } from "fs";
 import { join, extname, basename } from "path";
 import { config } from "./config.ts";
@@ -185,4 +186,10 @@ export function listProjects(): Project[] {
     .query(`SELECT config_json FROM projects ORDER BY created_at DESC`)
     .all() as { config_json: string }[];
   return rows.map((r) => JSON.parse(r.config_json) as Project);
+}
+
+export function deleteProjectLocal(id: string) {
+  rmSync(projectDir(id), { recursive: true, force: true });
+  db.query(`DELETE FROM jobs WHERE project_id = $id`).run({ $id: id });
+  db.query(`DELETE FROM projects WHERE id = $id`).run({ $id: id });
 }

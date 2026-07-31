@@ -74,16 +74,29 @@ ai-toolkit training, ComfyUI generation).
 | 4 | Subject   | GB10    | vLLM subject/aesthetic check   |
 | 5 | Crop      | GB10    | subject-aware crop             |
 | 6 | Caption   | GB10    | vLLM captioning                |
-| 7 | Train     | GB10    | ai-toolkit (Flux/SDXL/Wan)     |
-| 8 | Test      | GB10    | ComfyUI / diffusers generation |
+| 7 | Train     | GB10    | ai-toolkit (Flux/SDXL/Wan) LoRA or full |
+| 8 | Test      | GB10    | diffusers AutoPipeline generation |
 
-## Job API surface (draft)
-`POST /projects` · `POST /jobs {stage, project, params}` → `job_id` ·
-`GET /jobs/{id}` · `GET /jobs/{id}/logs` (SSE) · `GET /jobs` · `DELETE /jobs/{id}` ·
-`GET /models` · `GET /health`. Long jobs survive app restarts; logs are replayable.
+Quality/Subject each write a `manifest.json` (per-image score/match + keep flag)
+and copy only kept images forward; the UI reviews them and can override keeps.
+Train/Test run the `monocore-trainer` container **as the host user** (`--user`),
+one at a time through the job API's FIFO queue.
+
+## Job API surface
+- Jobs: `POST /jobs {stage, project, params}` → `job_id` · `GET /jobs` ·
+  `GET /jobs/{id}` · `GET /jobs/{id}/logs` (SSE) · `DELETE /jobs/{id}` (cancel).
+- ELT: `GET /elt/manifest` · `POST /elt/override`.
+- `GET /models` · `GET /health` (status, models, `disk_free_gb`, `gpu`).
+- FIFO queue → one job at a time; jobs start `queued`. Cancel `docker kill`s
+  train/test containers named `monocore-<job_id>`.
+
+Backend (local) adds project CRUD (incl. **DELETE** → removes local + GB10 dirs),
+per-stage runners, manual overrides, sample/artifact serving, and **LoRA export**
+(`scp` a trained `.safetensors` to a local folder).
 
 ## Transport & security
 - bun backend opens `ssh -L 8788:localhost:8788 gb10`; the API never binds a public
-  interface. File movement via `rsync -az` over the same SSH.
-- Default-settings engine prefills all training params from (base model × training
-  type), targeting high VRAM utilization (~128GB) where appropriate.
+  interface. File movement via `rsync -az` / `scp` over the same SSH.
+- Default-settings engine prefills all params from (base model × training type).
+  **VRAM tuning:** SDXL LoRA trains unquantized at batch 4 (spends the 128GB);
+  Flux stays quantized (unquantized Flux spikes load enough to starve SSH).

@@ -1,8 +1,9 @@
-import { useState } from "react";
-import { api, type Project, type TrainMode } from "../api";
+import { useEffect, useState } from "react";
+import { api, type Project, type TrainMode, type Artifact } from "../api";
 import {
   Button,
   Badge,
+  Card,
   LogConsole,
   TextInput,
   Field,
@@ -51,7 +52,41 @@ export function ProjectView({
   const [testState, setTestState] = useState<StageState>("idle");
   const [testLines, setTestLines] = useState<string[]>([]);
   const [samples, setSamples] = useState<string[]>([]);
+  const [artifacts, setArtifacts] = useState<Artifact[]>([]);
+  const [exportDest, setExportDest] = useState("");
+  const [exportMsg, setExportMsg] = useState<string>();
   const [err, setErr] = useState<string>();
+
+  async function loadArtifacts() {
+    try {
+      setArtifacts((await api.getArtifacts(project.id)).artifacts);
+    } catch {
+      /* ignore */
+    }
+  }
+  useEffect(() => {
+    loadArtifacts();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function doExport(a: Artifact) {
+    setExportMsg(undefined);
+    setErr(undefined);
+    if (!exportDest.trim()) {
+      setErr("Enter a destination folder to export to.");
+      return;
+    }
+    try {
+      const { exported } = await api.exportArtifact(
+        project.id,
+        a.path,
+        exportDest.trim(),
+      );
+      setExportMsg(`Exported → ${exported}`);
+    } catch (e) {
+      setErr(String(e));
+    }
+  }
 
   async function refresh() {
     setProject(await api.getProject(project.id));
@@ -123,6 +158,7 @@ export function ProjectView({
           } catch {
             /* ignore */
           }
+          loadArtifacts();
         }
       });
     } catch (e) {
@@ -398,6 +434,59 @@ export function ProjectView({
           </div>
         </StageRow>
       </div>
+
+      {/* Artifacts / export */}
+      <Card className="p-5">
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-sm font-semibold tracking-wide text-muted uppercase">
+            Trained models
+          </h2>
+          <button
+            onClick={loadArtifacts}
+            className="text-xs text-muted transition hover:text-fg"
+          >
+            Refresh
+          </button>
+        </div>
+        {artifacts.length === 0 ? (
+          <p className="text-sm text-muted/60">
+            No trained models yet — run Train to produce a LoRA.
+          </p>
+        ) : (
+          <div className="flex flex-col gap-3">
+            <Field
+              label="Export to folder"
+              hint="Absolute path to an existing local folder."
+            >
+              <TextInput
+                value={exportDest}
+                onChange={(e) => setExportDest(e.currentTarget.value)}
+                placeholder="/home/you/loras"
+                className="max-w-md"
+              />
+            </Field>
+            <div className="flex flex-col gap-2">
+              {artifacts.map((a) => (
+                <div
+                  key={a.path}
+                  className="flex items-center gap-3 rounded-lg border border-border bg-bg/40 px-3 py-2"
+                >
+                  <span className="font-mono text-xs text-fg">{a.name}</span>
+                  <Badge>{a.sizeMB} MB</Badge>
+                  <Button
+                    variant="subtle"
+                    className="ml-auto"
+                    onClick={() => doExport(a)}
+                  >
+                    Export
+                  </Button>
+                </div>
+              ))}
+            </div>
+            {exportMsg && <div className="text-xs text-ok">{exportMsg}</div>}
+          </div>
+        )}
+      </Card>
     </div>
   );
 }

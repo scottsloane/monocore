@@ -6,8 +6,12 @@ export type Gb10Health = {
   reachable: boolean;
   tunnel: boolean;
   models: string[];
+  diskFreeGb?: number | null;
+  gpu?: string | null;
   error?: string;
 };
+
+export type Artifact = { name: string; path: string; sizeMB: number };
 
 export type Health = {
   backend: "ok";
@@ -126,6 +130,20 @@ export const api = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(input),
     }).then(j<Project>),
+  deleteProject: (id: string) =>
+    fetch(`${BASE}/api/projects/${id}`, { method: "DELETE" }).then(
+      j<{ ok: boolean }>,
+    ),
+  getArtifacts: (id: string) =>
+    fetch(`${BASE}/api/projects/${id}/artifacts`).then(
+      j<{ artifacts: Artifact[] }>,
+    ),
+  exportArtifact: (id: string, path: string, dest: string) =>
+    fetch(`${BASE}/api/projects/${id}/export`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path, dest }),
+    }).then(j<{ exported: string }>),
 
   runPrune: (id: string, minDim?: number) =>
     fetch(`${BASE}/api/projects/${id}/prune`, {

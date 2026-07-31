@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
@@ -33,9 +34,32 @@ async def vllm_models() -> list[str]:
         return []
 
 
+def gpu_info() -> str | None:
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name,memory.used,memory.total",
+             "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=5,
+        ).stdout.strip()
+        return out.splitlines()[0] if out else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 @app.get("/health")
 async def health() -> dict:
-    return {"status": "ok", "version": VERSION, "models": await vllm_models()}
+    try:
+        _, _, free = shutil.disk_usage(os.path.expanduser("~/monocore"))
+        disk_free_gb = round(free / 1e9, 1)
+    except Exception:  # noqa: BLE001
+        disk_free_gb = None
+    return {
+        "status": "ok",
+        "version": VERSION,
+        "models": await vllm_models(),
+        "disk_free_gb": disk_free_gb,
+        "gpu": gpu_info(),
+    }
 
 
 @app.get("/models")

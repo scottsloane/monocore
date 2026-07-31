@@ -50,6 +50,8 @@ export type Gb10Health = {
   reachable: boolean;
   tunnel: boolean;
   models: string[];
+  diskFreeGb?: number | null;
+  gpu?: string | null;
   error?: string;
 };
 
@@ -58,8 +60,18 @@ export async function health(): Promise<Gb10Health> {
   try {
     const res = await gb10Fetch("/health");
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const body = (await res.json()) as { models?: string[] };
-    return { reachable: true, tunnel: true, models: body.models ?? [] };
+    const body = (await res.json()) as {
+      models?: string[];
+      disk_free_gb?: number | null;
+      gpu?: string | null;
+    };
+    return {
+      reachable: true,
+      tunnel: true,
+      models: body.models ?? [],
+      diskFreeGb: body.disk_free_gb,
+      gpu: body.gpu,
+    };
   } catch (e) {
     return {
       reachable: false,
@@ -81,6 +93,53 @@ function run(cmd: string[]): Promise<void> {
   });
 }
 
+async function runCapture(cmd: string[]): Promise<string> {
+  const p = Bun.spawn(cmd, { stdout: "pipe", stderr: "pipe" });
+  const out = await new Response(p.stdout).text();
+  await p.exited;
+  return out;
+}
+
+export type Artifact = { name: string; path: string; sizeMB: number };
+
+/** List trained LoRA .safetensors under a project's output dir on the GB10. */
+export async function listArtifacts(id: string): Promise<Artifact[]> {
+  if (!/^[\w-]+$/.test(id)) throw new Error(`bad project id: ${id}`);
+  const out = await runCapture([
+    "ssh",
+    config.gb10.sshHost,
+    `find monocore/projects/${id}/output -name '*.safetensors' -printf '%p\\t%s\\n' 2>/dev/null || true`,
+  ]);
+  return out
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => {
+      const [path, size] = line.split("\t");
+      return {
+        path,
+        name: path.split("/").pop() ?? path,
+        sizeMB: Math.round((Number(size) / 1e6) * 10) / 10,
+      };
+    });
+}
+
+/** Copy an artifact from the GB10 to a local destination directory. */
+export async function exportArtifact(
+  id: string,
+  remotePath: string,
+  destDir: string,
+): Promise<string> {
+  if (
+    !remotePath.startsWith(`monocore/projects/${id}/output/`) ||
+    !remotePath.endsWith(".safetensors")
+  )
+    throw new Error("invalid artifact path");
+  const name = remotePath.split("/").pop()!;
+  const dest = `${destDir.replace(/\/?$/, "")}/${name}`;
+  await run(["scp", `${config.gb10.sshHost}:${remotePath}`, dest]);
+  return dest;
+}
+
 /**
  * Mirror a local directory to a path under the GB10 home (relative to ~), e.g.
  * `monocore/projects/<id>/input`. Creates the remote path and rsyncs contents.
@@ -98,6 +157,13 @@ export async function syncToGb10(
     `${localDir.replace(/\/?$/, "")}/`,
     `${host}:${remoteRel}/`,
   ]);
+}
+
+/** Remove a project's directory tree on the GB10. */
+export async function removeRemoteProject(id: string): Promise<void> {
+  // guard against empty/odd ids so we never rm something unintended
+  if (!/^[\w-]+$/.test(id)) throw new Error(`bad project id: ${id}`);
+  await run(["ssh", config.gb10.sshHost, `rm -rf monocore/projects/${id}`]);
 }
 
 /** Pull a directory from under the GB10 home (relative to ~) to a local dir. */

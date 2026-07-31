@@ -7,18 +7,32 @@ import { ProjectView } from "./views/ProjectView";
 function StatusPill({ health }: { health?: Health }) {
   const gb10 = health?.gb10;
   const ok = gb10?.reachable;
+  const gpuName = gb10?.gpu?.split(",")[0]?.trim();
   return (
-    <div className="flex items-center gap-2 rounded-full border border-border bg-panel px-3 py-1.5 text-xs">
-      <Dot ok={health ? ok : undefined} />
-      <span className="text-muted">
-        {!health
-          ? "backend offline"
-          : ok
-            ? "GB10 connected"
-            : gb10?.tunnel
-              ? "GB10 unreachable"
-              : "tunnel down"}
+    <div className="flex items-center gap-3 rounded-full border border-border bg-panel px-3 py-1.5 text-xs">
+      <span className="flex items-center gap-2">
+        <Dot ok={health ? ok : undefined} />
+        <span className="text-muted">
+          {!health
+            ? "backend offline"
+            : ok
+              ? "GB10 connected"
+              : gb10?.tunnel
+                ? "GB10 unreachable"
+                : "tunnel down"}
+        </span>
       </span>
+      {ok && gpuName && (
+        <span className="hidden text-muted/70 sm:inline">· {gpuName}</span>
+      )}
+      {ok && gb10?.diskFreeGb != null && (
+        <span className="hidden text-muted/70 sm:inline">
+          · {gb10.diskFreeGb >= 1000
+            ? `${(gb10.diskFreeGb / 1000).toFixed(1)}TB`
+            : `${gb10.diskFreeGb}GB`}{" "}
+          free
+        </span>
+      )}
     </div>
   );
 }
@@ -26,12 +40,15 @@ function StatusPill({ health }: { health?: Health }) {
 function ProjectCard({
   project,
   onOpen,
+  onDelete,
 }: {
   project: Project;
   onOpen: () => void;
+  onDelete: () => void;
 }) {
+  const [confirm, setConfirm] = useState(false);
   return (
-    <Card className="cursor-pointer p-5 transition hover:border-accent/50" >
+    <Card className="group relative p-5 transition hover:border-accent/50">
       <button onClick={onOpen} className="w-full text-left">
         <div className="flex items-center justify-between">
           <h3 className="font-semibold text-fg">{project.name}</h3>
@@ -41,10 +58,27 @@ function ProjectCard({
           <Badge>{project.trainType}</Badge>
           <span>· {project.source.imageCount} images</span>
         </div>
-        <div className="mt-3 text-xs text-muted/60">
-          stage: {project.status}
-        </div>
+        <div className="mt-3 text-xs text-muted/60">stage: {project.status}</div>
       </button>
+      {confirm ? (
+        <div className="absolute right-3 bottom-3 flex items-center gap-2 text-xs">
+          <span className="text-muted">Delete?</span>
+          <button onClick={onDelete} className="text-err hover:underline">
+            Yes
+          </button>
+          <button onClick={() => setConfirm(false)} className="text-muted hover:underline">
+            No
+          </button>
+        </div>
+      ) : (
+        <button
+          onClick={() => setConfirm(true)}
+          className="absolute right-3 bottom-3 text-xs text-muted/40 opacity-0 transition hover:text-err group-hover:opacity-100"
+          title="Delete project"
+        >
+          Delete
+        </button>
+      )}
     </Card>
   );
 }
@@ -127,6 +161,14 @@ export default function App() {
                   key={p.id}
                   project={p}
                   onOpen={() => setOpenId(p.id)}
+                  onDelete={async () => {
+                    setProjects((prev) => prev.filter((x) => x.id !== p.id));
+                    try {
+                      await api.deleteProject(p.id);
+                    } catch {
+                      refreshProjects();
+                    }
+                  }}
                 />
               ))}
             </div>
@@ -146,7 +188,7 @@ export default function App() {
       )}
 
       <footer className="mt-auto text-center text-xs text-muted/50">
-        M2 · see docs/PLAN.md
+        M4 · see docs/PLAN.md
       </footer>
     </div>
   );

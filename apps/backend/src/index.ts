@@ -14,6 +14,9 @@ import {
   fetchManifest,
   eltOverride,
   cancelRemoteJob,
+  removeRemoteProject,
+  listArtifacts,
+  exportArtifact,
 } from "./gb10.ts";
 import { MODEL_PATHS, vramProfile, sampleEvery } from "./defaults.ts";
 import { readdirSync, existsSync } from "fs";
@@ -41,6 +44,7 @@ import {
   listProjects,
   getProject,
   saveProject,
+  deleteProjectLocal,
   paths,
   type CreateInput,
 } from "./projects.ts";
@@ -149,6 +153,19 @@ const server = Bun.serve<WsData>({
     if (projMatch && req.method === "GET") {
       const p = getProject(projMatch[1]);
       return p ? json(p) : json({ error: "not found" }, 404);
+    }
+
+    // DELETE /api/projects/:id  → remove local + GB10 dirs + db rows
+    if (projMatch && req.method === "DELETE") {
+      const id = projMatch[1];
+      if (!getProject(id)) return json({ error: "not found" }, 404);
+      try {
+        if (tunnelUp()) await removeRemoteProject(id).catch(() => {});
+        deleteProjectLocal(id);
+        return json({ ok: true });
+      } catch (e) {
+        return json({ error: e instanceof Error ? e.message : String(e) }, 500);
+      }
     }
 
     // POST /api/projects/:id/prune | /dedupe  (local ELT stages)
@@ -408,6 +425,34 @@ const server = Bun.serve<WsData>({
           finished_at: null,
         });
         return json({ jobId: id, remoteId: remote.id });
+      } catch (e) {
+        return json({ error: e instanceof Error ? e.message : String(e) }, 502);
+      }
+    }
+
+    // GET /api/projects/:id/artifacts  → list trained LoRA files on the GB10
+    const artMatch = pathname.match(/^\/api\/projects\/([\w-]+)\/artifacts$/);
+    if (artMatch && req.method === "GET") {
+      if (!getProject(artMatch[1])) return json({ error: "not found" }, 404);
+      if (!tunnelUp()) return json({ artifacts: [] });
+      try {
+        return json({ artifacts: await listArtifacts(artMatch[1]) });
+      } catch (e) {
+        return json({ error: e instanceof Error ? e.message : String(e) }, 502);
+      }
+    }
+
+    // POST /api/projects/:id/export  { path, dest }  → copy a LoRA to a folder
+    const exportMatch = pathname.match(/^\/api\/projects\/([\w-]+)\/export$/);
+    if (exportMatch && req.method === "POST") {
+      if (!getProject(exportMatch[1])) return json({ error: "not found" }, 404);
+      try {
+        const body = (await req.json()) as { path: string; dest: string };
+        if (!body.dest?.trim()) return json({ error: "dest required" }, 400);
+        if (!existsSync(body.dest))
+          return json({ error: `folder not found: ${body.dest}` }, 400);
+        const out = await exportArtifact(exportMatch[1], body.path, body.dest);
+        return json({ exported: out });
       } catch (e) {
         return json({ error: e instanceof Error ? e.message : String(e) }, 502);
       }

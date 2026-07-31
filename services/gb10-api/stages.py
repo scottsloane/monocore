@@ -18,11 +18,16 @@ def container_name(job_id: str | None) -> str:
 
 
 def _trainer_docker(job_id: str | None) -> list[str]:
+    # Run as the host user so outputs (LoRA, samples, latent cache) are owned by
+    # the host user and manageable without root. HF cache is mounted at /hf
+    # (not under /root, which is 0700 and unreachable to a non-root user).
     return [
         "docker", "run", "--rm", "--name", container_name(job_id),
         "--gpus", "all", "--ipc=host",
+        "--user", f"{os.getuid()}:{os.getgid()}",
+        "-e", "HOME=/tmp", "-e", "HF_HOME=/hf",
         "--ulimit", "memlock=-1", "--ulimit", "stack=67108864",
-        "-v", f"{_HOME}/.cache/huggingface:/root/.cache/huggingface",
+        "-v", f"{_HOME}/.cache/huggingface:/hf",
         "-v", f"{_HOME}/monocore:/workspace/monocore",
         "monocore-trainer:latest",
     ]

@@ -4,14 +4,13 @@ A Flux/SDXL trainer with a full image **ETL pipeline** and a modern desktop UI.
 It prepares an image dataset (prune → dedupe → quality → subject → crop → caption),
 trains a model on a remote **NVIDIA GB10**, and tests it with generation.
 
-> Status: **M3 — training depth & multi-model complete.** Trains **Flux and SDXL**
-> (Wan wired) as **LoRA or full fine-tune**, with **VRAM auto-tuning** for the
-> GB10's ~128GB, **in-training samples**, a **job queue** (one job at a time), and
-> **cancel**. On top of the full M2 ELT pipeline (prune → dedupe → quality →
-> subject → crop → caption → train → test) with per-stage review + overrides.
-> Verified: SDXL and Flux LoRAs trained on the GB10 and used for test generation.
-> Next: **M4**, dashboard, artifact browser, hardening. See
-> [`docs/PLAN.md`](docs/PLAN.md).
+> Status: **M4 — polish & hardening complete.** Adds **project delete** (local +
+> GB10), an **artifact browser + LoRA export**, richer **GB10 health** (disk / GPU
+> in the UI), and a key fix: the **trainer runs as the host user** so its outputs
+> are owned/manageable without root. On top of the full pipeline (prune → dedupe →
+> quality → subject → crop → caption → train → test) trained for **Flux & SDXL**
+> (LoRA/full), with review overrides, a job queue, and cancel.
+> Ops guide: [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
 
 ## Architecture (short)
 
