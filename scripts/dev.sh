@@ -5,6 +5,13 @@ set -euo pipefail
 export PATH="$HOME/.bun/bin:$PATH"
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 
+# WebKitGTK's DMABUF renderer fails to allocate GPU buffers on some Linux
+# GPU/driver/compositor combos ("Failed to create GBM buffer" → blank window).
+# Fall back to the non-DMABUF path. Set MONOCORE_GPU=1 to keep GPU accel.
+if [ "${MONOCORE_GPU:-0}" != "1" ]; then
+  export WEBKIT_DISABLE_DMABUF_RENDERER=1
+fi
+
 cleanup() { kill "$BACKEND_PID" 2>/dev/null || true; }
 trap cleanup EXIT
 

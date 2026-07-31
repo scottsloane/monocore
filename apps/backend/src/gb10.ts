@@ -39,10 +39,11 @@ export function stopTunnel() {
 
 export const tunnelUp = () => tunnel !== null;
 
+// timeoutMs <= 0 → no timeout (for long-lived streams; the API sends heartbeats).
 async function gb10Fetch(path: string, init?: RequestInit, timeoutMs = 4000) {
   return fetch(`${gb10BaseUrl()}${path}`, {
     ...init,
-    signal: AbortSignal.timeout(timeoutMs),
+    signal: timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined,
   });
 }
 
@@ -251,7 +252,7 @@ export async function* streamLogs(
   const res = await gb10Fetch(
     `/jobs/${id}/logs`,
     { headers: { accept: "text/event-stream" } },
-    1000 * 60 * 60, // long-lived stream
+    0, // no timeout: long-lived stream kept alive by API heartbeats
   );
   if (!res.body) throw new Error("no log stream body");
   const reader = res.body.getReader();

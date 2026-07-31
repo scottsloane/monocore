@@ -6,6 +6,7 @@ local orchestrator. See docs/ARCHITECTURE.md.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import shutil
@@ -171,7 +172,13 @@ async def job_logs(job_id: str, request: Request) -> StreamingResponse:
             while True:
                 if await request.is_disconnected():
                     break
-                kind, payload = await q.get()
+                try:
+                    kind, payload = await asyncio.wait_for(q.get(), timeout=15)
+                except asyncio.TimeoutError:
+                    # heartbeat: keep the connection alive during quiet phases
+                    # (e.g. caching latents) so the socket never idles out
+                    yield ": keepalive\n\n"
+                    continue
                 if kind == "line":
                     yield f"data: {json.dumps({'line': payload})}\n\n"
                 else:
