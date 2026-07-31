@@ -5,6 +5,8 @@ import base64
 import json
 import mimetypes
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Callable
 
 import httpx
 
@@ -58,3 +60,32 @@ def extract_json(text: str) -> dict:
     if not m:
         raise ValueError(f"no JSON object in response: {text[:160]!r}")
     return json.loads(m.group(0))
+
+
+def map_concurrent(
+    items: list,
+    worker: Callable,
+    workers: int = 8,
+    on_progress: Callable[[int, int, object], None] | None = None,
+) -> list:
+    """Run ``worker(item)`` over ``items`` with bounded concurrency.
+
+    vLLM serves concurrent requests via continuous batching, so firing several at
+    once is far faster than a serial loop. Results are returned in input order;
+    ``on_progress(completed, total, result)`` fires as each finishes (main thread).
+    Workers must catch their own errors and return a result (never raise).
+    """
+    n = len(items)
+    results: list = [None] * n
+    if n == 0:
+        return results
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
+        futs = {ex.submit(worker, it): i for i, it in enumerate(items)}
+        completed = 0
+        for fut in as_completed(futs):
+            i = futs[fut]
+            results[i] = fut.result()
+            completed += 1
+            if on_progress:
+                on_progress(completed, n, results[i])
+    return results

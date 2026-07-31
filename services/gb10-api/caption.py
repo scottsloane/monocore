@@ -7,13 +7,13 @@ Runs on the GB10, invoked by the job API as the `caption` stage.
 from __future__ import annotations
 
 import argparse
-import base64
-import mimetypes
 import os
 import shutil
 import sys
 
 import httpx
+
+from vllm_client import ask, map_concurrent
 
 IMAGE_EXT = (".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff", ".tif", ".avif")
 
@@ -41,12 +41,6 @@ PROMPTS = {
 }
 
 
-def data_uri(path: str) -> str:
-    mime = mimetypes.guess_type(path)[0] or "image/png"
-    with open(path, "rb") as f:
-        return f"data:{mime};base64," + base64.b64encode(f.read()).decode()
-
-
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--project", required=True, help="project id")
@@ -57,6 +51,7 @@ def main() -> int:
         default="01_deduped",
         help="work subdir to caption (latest completed ELT stage)",
     )
+    ap.add_argument("--concurrency", type=int, default=8)
     ap.add_argument("--model", default="Qwen/Qwen2.5-VL-32B-Instruct-AWQ")
     ap.add_argument("--vllm", default="http://127.0.0.1:8000")
     a = ap.parse_args()
@@ -70,46 +65,31 @@ def main() -> int:
     prompt = PROMPTS.get(a.type, PROMPTS["subject"])
     print(f"[caption] {len(imgs)} image(s), type={a.type}, model={a.model}", flush=True)
 
-    ok = 0
     with httpx.Client(timeout=180) as client:
-        for i, fn in enumerate(imgs, 1):
+        def worker(fn):
             src = os.path.join(in_dir, fn)
             try:
-                resp = client.post(
-                    f"{a.vllm}/v1/chat/completions",
-                    json={
-                        "model": a.model,
-                        "max_tokens": 200,
-                        "temperature": 0.2,
-                        "messages": [
-                            {
-                                "role": "user",
-                                "content": [
-                                    {"type": "text", "text": prompt},
-                                    {
-                                        "type": "image_url",
-                                        "image_url": {"url": data_uri(src)},
-                                    },
-                                ],
-                            }
-                        ],
-                    },
+                caption = ask(
+                    client, prompt, src,
+                    model=a.model, vllm=a.vllm, max_tokens=200, temperature=0.2,
                 )
-                resp.raise_for_status()
-                caption = resp.json()["choices"][0]["message"]["content"].strip()
             except Exception as e:  # noqa: BLE001
-                print(f"[caption] {i}/{len(imgs)} {fn}: ERROR {e}", flush=True)
-                continue
-
+                return {"file": fn, "ok": False, "text": f"ERROR {e}"}
             if a.trigger:
                 caption = f"{a.trigger}, {caption}"
             base, _ = os.path.splitext(fn)
             shutil.copyfile(src, os.path.join(out_dir, fn))
             with open(os.path.join(out_dir, base + ".txt"), "w") as f:
                 f.write(caption)
-            ok += 1
-            print(f"[caption] {i}/{len(imgs)} {fn}: {caption[:80]}", flush=True)
+            return {"file": fn, "ok": True, "text": caption}
 
+        def prog(done, total, it):
+            body = it["text"][:80] if it["ok"] else it["text"]
+            print(f"[caption] {done}/{total} {it['file']}: {body}", flush=True)
+
+        results = map_concurrent(imgs, worker, a.concurrency, prog)
+
+    ok = sum(1 for r in results if r["ok"])
     print(f"[caption] done — {ok}/{len(imgs)} captioned → {out_dir}", flush=True)
     return 0 if ok == len(imgs) else 1
 

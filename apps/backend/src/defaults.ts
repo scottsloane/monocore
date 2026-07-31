@@ -16,6 +16,7 @@ export type Settings = {
   learningRate: number;
   rank: number; // LoRA rank
   trainMode: TrainMode;
+  vllmConcurrency: number; // in-flight vLLM requests per ELT stage
   trigger?: string; // LoRA activation token (set when captioning)
 };
 
@@ -96,5 +97,6 @@ export function resolveDefaults(
     learningRate: 1e-4,
     rank: trainType === "face" || trainType === "person" ? 24 : 16,
     trainMode: "lora",
+    vllmConcurrency: 8,
   };
 }

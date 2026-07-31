@@ -2,6 +2,22 @@
 
 Short, dated records of load-bearing choices. Newest first.
 
+## 2026-07-31 — Stage parallelization
+- **vLLM ELT stages (quality/subject/crop/caption) fire bounded-concurrent
+  requests** (default 8 in flight) instead of a serial loop. vLLM continuous-
+  batches concurrent requests, so on a free GPU this is a large wall-clock win at
+  dataset scale (100s of images); it was the pipeline's main bottleneck. Shared
+  `map_concurrent` (ThreadPoolExecutor) returns results in input order for a
+  stable manifest; per-image file writes are independent (thread-safe).
+  Tunable via `settings.vllmConcurrency`.
+- **Local prune/dedupe hash in parallel** (`mapLimit`, 8-wide) — smaller win;
+  dedupe still clusters in a deterministic serial pass over the precomputed
+  hashes so the kept set doesn't depend on timing.
+- **Train is not parallelized** — a single run already uses the whole GPU; batch
+  size is the parallelism knob (VRAM-tuned).
+- Benchmark note: concurrency only helps when the GPU has spare capacity; if
+  something else saturates it (e.g. ComfyUI), measure on an idle box.
+
 ## 2026-07-30 — M3 training depth
 - **Multi-model via ai-toolkit arch flags:** Flux `is_flux: true`, SDXL
   `arch: 'sdxl'`, Wan `arch: 'wan21'`. Test generation uses diffusers

@@ -88,6 +88,8 @@ def build_command(stage: str, params: dict, job_id: str | None = None) -> list[s
             cmd += ["--pad", str(params["pad"])]
         if params.get("min_side") is not None:
             cmd += ["--min-side", str(params["min_side"])]
+        if params.get("concurrency") is not None:
+            cmd += ["--concurrency", str(params["concurrency"])]
         return cmd
 
     if stage == "caption":
@@ -105,6 +107,8 @@ def build_command(stage: str, params: dict, job_id: str | None = None) -> list[s
             cmd += ["--trigger", str(params["trigger"])]
         if params.get("input_sub"):
             cmd += ["--input-sub", str(params["input_sub"])]
+        if params.get("concurrency") is not None:
+            cmd += ["--concurrency", str(params["concurrency"])]
         if params.get("model"):
             cmd += ["--model", str(params["model"])]
         return cmd

@@ -4,6 +4,7 @@ import sharp from "sharp";
 import { copyFileSync } from "fs";
 import { basename, join } from "path";
 import { paths, listImages, type Project } from "../projects.ts";
+import { mapLimit } from "./concurrency.ts";
 
 export type PruneResult = {
   total: number;
@@ -19,19 +20,19 @@ export async function prune(
   const p = paths(project.id);
   const outDir = p.workDir("00_pruned");
   const imgs = listImages(p.source);
-  let kept = 0;
-  for (const file of imgs) {
+  // read metadata (and copy the keepers) in parallel — IO/CPU bound per image
+  const keeps = await mapLimit(imgs, 8, async (file) => {
     try {
       const meta = await sharp(file).metadata();
-      const w = meta.width ?? 0;
-      const h = meta.height ?? 0;
-      if (Math.min(w, h) >= minDim) {
+      if (Math.min(meta.width ?? 0, meta.height ?? 0) >= minDim) {
         copyFileSync(file, join(outDir, basename(file)));
-        kept++;
+        return true;
       }
     } catch {
       // unreadable image → treat as pruned
     }
-  }
+    return false;
+  });
+  const kept = keeps.filter(Boolean).length;
   return { total: imgs.length, kept, pruned: imgs.length - kept, minDim };
 }

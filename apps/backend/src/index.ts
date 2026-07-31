@@ -224,6 +224,7 @@ const server = Bun.serve<WsData>({
           out: cfg.out,
           subject: project.subject,
           type: project.trainType,
+          concurrency: project.settings.vllmConcurrency ?? 8,
         };
         if (stage === "quality")
           params.threshold = body.threshold ?? project.settings.qualityThreshold;
@@ -343,6 +344,7 @@ const server = Bun.serve<WsData>({
           type: project.trainType,
           trigger,
           input_sub: inputSub,
+          concurrency: project.settings.vllmConcurrency ?? 8,
         });
         // remember the trigger so training reuses it as the activation token
         project.settings.trigger = trigger;

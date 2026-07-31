@@ -5,6 +5,7 @@ import { copyFileSync } from "fs";
 import { basename, join } from "path";
 import { paths, listImages, type Project } from "../projects.ts";
 import { dhash, hamming } from "./hash.ts";
+import { mapLimit } from "./concurrency.ts";
 
 export type DedupeResult = {
   total: number;
@@ -22,18 +23,24 @@ export async function dedupe(
   const outDir = p.workDir("01_deduped");
   const imgs = listImages(inDir);
 
+  // Hash all images in parallel (the expensive part), then greedily cluster in a
+  // stable serial pass so the kept set is deterministic regardless of timing.
+  const hashes = await mapLimit(imgs, 8, async (file) => {
+    try {
+      return await dhash(file);
+    } catch {
+      return null;
+    }
+  });
+
   const keptHashes: bigint[] = [];
   let kept = 0;
-  for (const file of imgs) {
-    let h: bigint;
-    try {
-      h = await dhash(file);
-    } catch {
-      continue;
-    }
+  for (let i = 0; i < imgs.length; i++) {
+    const h = hashes[i];
+    if (h === null) continue;
     if (keptHashes.some((k) => hamming(h, k) <= threshold)) continue;
     keptHashes.push(h);
-    copyFileSync(file, join(outDir, basename(file)));
+    copyFileSync(imgs[i], join(outDir, basename(imgs[i])));
     kept++;
   }
   return { total: imgs.length, kept, removed: imgs.length - kept, threshold };

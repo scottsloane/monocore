@@ -42,6 +42,7 @@ export type Settings = {
   learningRate: number;
   rank: number;
   trainMode: TrainMode;
+  vllmConcurrency?: number;
   trigger?: string;
 };
 

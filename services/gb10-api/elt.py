@@ -18,7 +18,7 @@ import sys
 import httpx
 from PIL import Image
 
-from vllm_client import ask, extract_json, DEFAULT_MODEL
+from vllm_client import ask, extract_json, map_concurrent, DEFAULT_MODEL
 
 IMAGE_EXT = (".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff", ".tif", ".avif")
 
@@ -29,6 +29,9 @@ def list_images(d: str) -> list[str]:
     return sorted(f for f in os.listdir(d) if f.lower().endswith(IMAGE_EXT))
 
 
+# Each stage runs its per-image work concurrently (vLLM continuous-batches the
+# requests); results come back in input order for a stable manifest.
+
 # ---- quality -------------------------------------------------------------
 def stage_quality(client, in_dir, out_dir, imgs, args) -> list[dict]:
     prompt = (
@@ -37,8 +40,8 @@ def stage_quality(client, in_dir, out_dir, imgs, args) -> list[dict]:
         "and composition). Respond ONLY with JSON: "
         '{"score": <number 0-10>, "reason": "<short>"}'
     )
-    items = []
-    for i, fn in enumerate(imgs, 1):
+
+    def worker(fn):
         src = os.path.join(in_dir, fn)
         try:
             data = extract_json(ask(client, prompt, src, model=args.model, json_mode=True))
@@ -49,9 +52,13 @@ def stage_quality(client, in_dir, out_dir, imgs, args) -> list[dict]:
         keep = score >= args.threshold
         if keep:
             shutil.copyfile(src, os.path.join(out_dir, fn))
-        items.append({"file": fn, "score": round(score, 1), "keep": keep, "reason": reason})
-        print(f"[quality] {i}/{len(imgs)} {fn}: {score:.1f} {'keep' if keep else 'drop'}", flush=True)
-    return items
+        return {"file": fn, "score": round(score, 1), "keep": keep, "reason": reason}
+
+    def prog(done, total, it):
+        print(f"[quality] {done}/{total} {it['file']}: {it['score']} "
+              f"{'keep' if it['keep'] else 'drop'}", flush=True)
+
+    return map_concurrent(imgs, worker, args.concurrency, prog)
 
 
 # ---- subject / aesthetic -------------------------------------------------
@@ -70,8 +77,8 @@ def stage_subject(client, in_dir, out_dir, imgs, args) -> list[dict]:
         f"Does this image clearly depict that {noun}? Respond ONLY with JSON: "
         '{"match": true|false, "reason": "<short>"}'
     )
-    items = []
-    for i, fn in enumerate(imgs, 1):
+
+    def worker(fn):
         src = os.path.join(in_dir, fn)
         try:
             data = extract_json(ask(client, prompt, src, model=args.model, json_mode=True))
@@ -81,9 +88,13 @@ def stage_subject(client, in_dir, out_dir, imgs, args) -> list[dict]:
             match, reason = False, f"error: {e}"
         if match:
             shutil.copyfile(src, os.path.join(out_dir, fn))
-        items.append({"file": fn, "match": match, "keep": match, "reason": reason})
-        print(f"[subject] {i}/{len(imgs)} {fn}: {'match' if match else 'no'}", flush=True)
-    return items
+        return {"file": fn, "match": match, "keep": match, "reason": reason}
+
+    def prog(done, total, it):
+        print(f"[subject] {done}/{total} {it['file']}: "
+              f"{'match' if it['match'] else 'no'}", flush=True)
+
+    return map_concurrent(imgs, worker, args.concurrency, prog)
 
 
 # ---- crop ----------------------------------------------------------------
@@ -95,8 +106,8 @@ def stage_crop(client, in_dir, out_dir, imgs, args) -> list[dict]:
         "x0<x1 and y0<y1. If the subject already fills most of the frame, return "
         '{"box": [0, 0, 1, 1]}.'
     )
-    items = []
-    for i, fn in enumerate(imgs, 1):
+
+    def worker(fn):
         src = os.path.join(in_dir, fn)
         item = {"file": fn, "keep": True}
         try:
@@ -125,9 +136,13 @@ def stage_crop(client, in_dir, out_dir, imgs, args) -> list[dict]:
         except Exception as e:  # noqa: BLE001
             shutil.copyfile(src, os.path.join(out_dir, fn))
             item.update(cropped=False, reason=f"error: {e}")
-        items.append(item)
-        print(f"[crop] {i}/{len(imgs)} {fn}: {'cropped' if item.get('cropped') else 'kept'}", flush=True)
-    return items
+        return item
+
+    def prog(done, total, it):
+        print(f"[crop] {done}/{total} {it['file']}: "
+              f"{'cropped' if it.get('cropped') else 'kept'}", flush=True)
+
+    return map_concurrent(imgs, worker, args.concurrency, prog)
 
 
 STAGES = {"quality": stage_quality, "subject": stage_subject, "crop": stage_crop}
@@ -144,6 +159,7 @@ def main() -> int:
     ap.add_argument("--threshold", type=float, default=5.0)
     ap.add_argument("--pad", type=float, default=0.12)
     ap.add_argument("--min-side", type=int, default=512)
+    ap.add_argument("--concurrency", type=int, default=8)
     ap.add_argument("--model", default=DEFAULT_MODEL)
     args = ap.parse_args()
 
