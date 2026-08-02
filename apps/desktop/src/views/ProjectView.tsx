@@ -66,7 +66,14 @@ export function ProjectView({
     initial.stages.test ? "done" : "idle",
   );
   const [testLines, setTestLines] = useState<string[]>([]);
+  const [testPrompt, setTestPrompt] = useState(
+    "a professional photograph, sharp focus",
+  );
   const [samples, setSamples] = useState<string[]>([]);
+
+  // The trigger baked into the trained LoRA — shown locked in front of the test
+  // prompt so it can't be dropped (the LoRA won't activate without it).
+  const activeTrigger = (project.settings.trigger ?? "").trim();
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [exportDest, setExportDest] = useState("");
   const [exportMsg, setExportMsg] = useState<string>();
@@ -208,7 +215,9 @@ export function ProjectView({
     setSamples([]);
     setErr(undefined);
     try {
-      const { jobId } = await api.runTest(project.id);
+      const desc = testPrompt.trim();
+      const full = activeTrigger ? `${activeTrigger}, ${desc}` : desc;
+      const { jobId } = await api.runTest(project.id, full || undefined);
       streamStage(jobId, setTestState, setTestLines, async (ok) => {
         if (ok) {
           api.markStageDone(project.id, "test").catch(() => {});
@@ -445,6 +454,31 @@ export function ProjectView({
           }
         >
           <div className="mt-4 flex flex-col gap-3">
+            <Field
+              label="Prompt"
+              hint={
+                activeTrigger
+                  ? "The trigger token is locked in front so the LoRA always activates."
+                  : "What to generate with the trained model."
+              }
+            >
+              <div className="flex items-stretch gap-2">
+                {activeTrigger && (
+                  <span
+                    className="flex select-none items-center rounded-lg border border-border bg-panel-2 px-3 text-sm text-muted"
+                    title="Trigger token (fixed)"
+                  >
+                    {activeTrigger},
+                  </span>
+                )}
+                <TextInput
+                  value={testPrompt}
+                  onChange={(e) => setTestPrompt(e.currentTarget.value)}
+                  placeholder="a professional photograph, sharp focus"
+                  className="flex-1"
+                />
+              </div>
+            </Field>
             {(testState === "running" || testLines.length > 0) && (
               <LogConsole lines={testLines} className="h-40" empty="Waiting for the GB10…" />
             )}
