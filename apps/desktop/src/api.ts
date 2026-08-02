@@ -135,6 +135,12 @@ export const api = {
     fetch(`${BASE}/api/projects/${id}`, { method: "DELETE" }).then(
       j<{ ok: boolean }>,
     ),
+  markStageDone: (id: string, stage: "caption" | "train" | "test") =>
+    fetch(`${BASE}/api/projects/${id}/stage-done`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ stage }),
+    }).then(j<{ ok: boolean }>),
   getArtifacts: (id: string) =>
     fetch(`${BASE}/api/projects/${id}/artifacts`).then(
       j<{ artifacts: Artifact[] }>,

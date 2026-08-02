@@ -39,6 +39,18 @@ function latestSourceSub(project: {
   if (project.stages.quality) return "02_quality";
   return "01_deduped";
 }
+
+// Pipeline order — used to advance project.status without regressing it (e.g.
+// re-viewing an earlier stage's manifest must not move status backward).
+const STAGE_ORDER = [
+  "created", "prune", "dedupe", "quality", "subject", "crop",
+  "caption", "train", "test",
+];
+function advanceStatus(status: string, stage: string): string {
+  return STAGE_ORDER.indexOf(stage) > STAGE_ORDER.indexOf(status)
+    ? stage
+    : status;
+}
 import {
   createProject,
   listProjects,
@@ -168,6 +180,25 @@ const server = Bun.serve<WsData>({
       }
     }
 
+    // POST /api/projects/:id/stage-done  { stage }  → persist completion of a
+    // GB10 job stage (caption/train/test) so it survives an app restart.
+    const doneMatch = pathname.match(/^\/api\/projects\/([\w-]+)\/stage-done$/);
+    if (doneMatch && req.method === "POST") {
+      const project = getProject(doneMatch[1]);
+      if (!project) return json({ error: "not found" }, 404);
+      try {
+        const { stage } = (await req.json()) as { stage: string };
+        if (!["caption", "train", "test"].includes(stage))
+          return json({ error: "bad stage" }, 400);
+        project.stages[stage] = { done: true };
+        project.status = advanceStatus(project.status, stage);
+        saveProject(project);
+        return json({ ok: true });
+      } catch (e) {
+        return json({ error: e instanceof Error ? e.message : String(e) }, 500);
+      }
+    }
+
     // POST /api/projects/:id/prune | /dedupe  (local ELT stages)
     const stageMatch = pathname.match(
       /^\/api\/projects\/([\w-]+)\/(prune|dedupe)$/,
@@ -272,7 +303,7 @@ const server = Bun.serve<WsData>({
           );
         }
         project.stages[stage] = { total: manifest.total, kept: manifest.kept };
-        project.status = stage;
+        project.status = advanceStatus(project.status, stage);
         saveProject(project);
         return json(manifest);
       } catch (e) {
@@ -465,19 +496,17 @@ const server = Bun.serve<WsData>({
     if (samplesMatch && req.method === "GET") {
       const project = getProject(samplesMatch[1]);
       if (!project) return json({ error: "not found" }, 404);
-      try {
-        const local = join(paths(project.id).output, "test");
-        await syncFromGb10(
-          `monocore/projects/${project.id}/output/test`,
-          local,
-        );
-        const files = existsSync(local)
-          ? readdirSync(local).filter((f) => /\.(png|jpe?g|webp)$/i.test(f))
-          : [];
-        return json({ files });
-      } catch (e) {
-        return json({ error: e instanceof Error ? e.message : String(e) }, 502);
-      }
+      const local = join(paths(project.id).output, "test");
+      // A missing remote dir (e.g. never tested, or files cleaned up) is not an
+      // error — just report whatever is available locally.
+      await syncFromGb10(
+        `monocore/projects/${project.id}/output/test`,
+        local,
+      ).catch(() => {});
+      const files = existsSync(local)
+        ? readdirSync(local).filter((f) => /\.(png|jpe?g|webp)$/i.test(f))
+        : [];
+      return json({ files });
     }
 
     // GET /api/projects/:id/sample?f=NAME  → serve a test image
@@ -498,21 +527,17 @@ const server = Bun.serve<WsData>({
     if (trSamples && req.method === "GET") {
       const project = getProject(trSamples[1]);
       if (!project) return json({ error: "not found" }, 404);
-      try {
-        const local = join(paths(project.id).output, "train_samples");
-        await syncFromGb10(
-          `monocore/projects/${project.id}/output/${project.id}/samples`,
-          local,
-        );
-        const files = existsSync(local)
-          ? readdirSync(local)
-              .filter((f) => /\.(png|jpe?g|webp)$/i.test(f))
-              .sort()
-          : [];
-        return json({ files });
-      } catch (e) {
-        return json({ error: e instanceof Error ? e.message : String(e) }, 502);
-      }
+      const local = join(paths(project.id).output, "train_samples");
+      await syncFromGb10(
+        `monocore/projects/${project.id}/output/${project.id}/samples`,
+        local,
+      ).catch(() => {});
+      const files = existsSync(local)
+        ? readdirSync(local)
+            .filter((f) => /\.(png|jpe?g|webp)$/i.test(f))
+            .sort()
+        : [];
+      return json({ files });
     }
 
     // GET /api/projects/:id/train-sample?f=NAME  → serve a training sample

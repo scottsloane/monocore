@@ -13,6 +13,15 @@ import {
 } from "../ui";
 import { EltStage } from "./EltStage";
 
+// Extract a persisted ELT stage summary ({total, kept}) from project.stages.
+function eltSummary(s: unknown): { total: number; kept: number } | undefined {
+  if (s && typeof s === "object" && "total" in s && "kept" in s) {
+    const o = s as { total: number; kept: number };
+    return { total: o.total, kept: o.kept };
+  }
+  return undefined;
+}
+
 // Human summary of the VRAM auto-tuning for the ~128GB GB10.
 function vramSummary(base: string, mode: TrainMode): string {
   if (mode === "full") return "full fine-tune · gradient checkpointing";
@@ -40,16 +49,22 @@ export function ProjectView({
     subject: !!initial.stages.subject,
     crop: !!initial.stages.crop,
   });
-  const [capState, setCapState] = useState<StageState>("idle");
+  const [capState, setCapState] = useState<StageState>(
+    initial.stages.caption ? "done" : "idle",
+  );
   const [trigger, setTrigger] = useState(initial.settings.trigger ?? "");
   const [capLines, setCapLines] = useState<string[]>([]);
-  const [trainState, setTrainState] = useState<StageState>("idle");
+  const [trainState, setTrainState] = useState<StageState>(
+    initial.stages.train ? "done" : "idle",
+  );
   const [trainLines, setTrainLines] = useState<string[]>([]);
   const [steps, setSteps] = useState<number>(initial.settings.steps);
   const [mode, setMode] = useState<TrainMode>(initial.settings.trainMode);
   const [trainJob, setTrainJob] = useState<string>();
   const [trainSamples, setTrainSamples] = useState<string[]>([]);
-  const [testState, setTestState] = useState<StageState>("idle");
+  const [testState, setTestState] = useState<StageState>(
+    initial.stages.test ? "done" : "idle",
+  );
   const [testLines, setTestLines] = useState<string[]>([]);
   const [samples, setSamples] = useState<string[]>([]);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
@@ -66,6 +81,13 @@ export function ProjectView({
   }
   useEffect(() => {
     loadArtifacts();
+    // restore test samples if this project was already tested
+    if (initial.stages.test) {
+      api
+        .getSamples(project.id)
+        .then((r) => setSamples(r.files))
+        .catch(() => {});
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -136,7 +158,9 @@ export function ProjectView({
     setErr(undefined);
     try {
       const { jobId } = await api.runCaption(project.id, trigger.trim());
-      streamStage(jobId, setCapState, setCapLines);
+      streamStage(jobId, setCapState, setCapLines, (ok) => {
+        if (ok) api.markStageDone(project.id, "caption").catch(() => {});
+      });
     } catch (e) {
       setErr(String(e));
       setCapState("error");
@@ -153,6 +177,7 @@ export function ProjectView({
       setTrainJob(jobId);
       streamStage(jobId, setTrainState, setTrainLines, async (ok) => {
         if (ok) {
+          api.markStageDone(project.id, "train").catch(() => {});
           try {
             setTrainSamples((await api.getTrainSamples(project.id)).files);
           } catch {
@@ -186,6 +211,7 @@ export function ProjectView({
       const { jobId } = await api.runTest(project.id);
       streamStage(jobId, setTestState, setTestLines, async (ok) => {
         if (ok) {
+          api.markStageDone(project.id, "test").catch(() => {});
           try {
             setSamples((await api.getSamples(project.id)).files);
           } catch {
@@ -279,6 +305,7 @@ export function ProjectView({
           title="Quality"
           desc="Score images with vLLM and drop low-quality ones"
           enabled={dedupeDone}
+          initialSummary={eltSummary(initial.stages.quality)}
           onDone={() => setElt((e) => ({ ...e, quality: true }))}
         />
         <EltStage
@@ -288,6 +315,7 @@ export function ProjectView({
           title="Subject"
           desc="Keep only images matching the subject / aesthetic (vLLM)"
           enabled={elt.quality}
+          initialSummary={eltSummary(initial.stages.subject)}
           onDone={() => setElt((e) => ({ ...e, subject: true }))}
         />
         <EltStage
@@ -297,6 +325,7 @@ export function ProjectView({
           title="Crop"
           desc="Subject-aware crop where it helps (vLLM bounding box)"
           enabled={elt.subject}
+          initialSummary={eltSummary(initial.stages.crop)}
           onDone={() => setElt((e) => ({ ...e, crop: true }))}
         />
 
@@ -328,7 +357,7 @@ export function ProjectView({
                 className="max-w-xs"
               />
             </Field>
-            {(capState !== "idle" || capLines.length > 0) && (
+            {(capState === "running" || capLines.length > 0) && (
               <LogConsole lines={capLines} className="h-56" empty="Waiting for the GB10…" />
             )}
           </div>
@@ -378,7 +407,7 @@ export function ProjectView({
                 />
               </Field>
             </div>
-            {(trainState !== "idle" || trainLines.length > 0) && (
+            {(trainState === "running" || trainLines.length > 0) && (
               <LogConsole lines={trainLines} className="h-56" empty="Waiting for the GB10 trainer…" />
             )}
             {trainSamples.length > 0 && (
@@ -416,7 +445,7 @@ export function ProjectView({
           }
         >
           <div className="mt-4 flex flex-col gap-3">
-            {(testState !== "idle" || testLines.length > 0) && (
+            {(testState === "running" || testLines.length > 0) && (
               <LogConsole lines={testLines} className="h-40" empty="Waiting for the GB10…" />
             )}
             {samples.length > 0 && (
