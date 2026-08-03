@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from stages import build_command, container_name
 
 CONTAINER_STAGES = {"train", "test"}
+MAX_LINES = 5000  # per-job retained log lines (rolling)
 
 
 @dataclass
@@ -79,6 +80,10 @@ class JobManager:
     async def _emit(self, job: Job, line: str) -> None:
         async with job.lock:
             job.lines.append(line)
+            # bound retained history (long trainings emit thousands of progress
+            # lines) so memory / replay stays sane
+            if len(job.lines) > MAX_LINES:
+                del job.lines[: len(job.lines) - MAX_LINES]
             for q in job.subscribers:
                 q.put_nowait(("line", line))
 
@@ -93,8 +98,22 @@ class JobManager:
             )
             job._proc = proc
             assert proc.stdout is not None
-            async for raw in proc.stdout:
-                await self._emit(job, raw.decode(errors="replace").rstrip("\n"))
+            # Read raw chunks rather than readline(): tqdm progress bars update
+            # with '\r' and emit no '\n' for thousands of updates, which overruns
+            # StreamReader's 64KB line limit ("Separator is not found…"). Draining
+            # in chunks and treating CR as a line break avoids the crash (and the
+            # pipe never fills), turning each progress tick into its own log line.
+            buf = b""
+            while True:
+                chunk = await proc.stdout.read(4096)
+                if not chunk:
+                    break
+                buf += chunk.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+                while b"\n" in buf:
+                    line, buf = buf.split(b"\n", 1)
+                    await self._emit(job, line.decode(errors="replace"))
+            if buf:
+                await self._emit(job, buf.decode(errors="replace"))
             rc = await proc.wait()
             job.exit_code = rc
             if job.status != "canceled":
